@@ -38,7 +38,10 @@ class NotionError(RuntimeError):
         self.hint = hint
         message = f"Notion API returned {status}: {body}"
         if hint:
-            message = f"{message}\n→ {hint}"
+            # ASCII only: this message gets printed to a Windows console in the
+            # demo, and a cp1252 terminal turns a stray arrow glyph into a
+            # UnicodeEncodeError that masks the real Notion failure.
+            message = f"{message}\nFIX: {hint}"
         super().__init__(message)
 
 
@@ -69,7 +72,7 @@ def _hint_for(status: int, body: str, path: str) -> str:
             "Notion returns 404 both for a page that does not exist and for one "
             "your integration cannot see. If the page exists, open it in Notion "
             "and share the page with your integration "
-            "(••• → Connections → add your integration), then retry."
+            "(the ... menu -> Connections -> add your integration), then retry."
         )
     if status == 403:
         return (
