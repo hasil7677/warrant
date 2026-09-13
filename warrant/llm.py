@@ -79,18 +79,47 @@ class BedrockConverse:
             }
         } for t in tools]
 
+    # Set once a model has told us it rejects system messages, so the retry
+    # below happens at most once per process rather than on every call.
+    _no_system: bool = False
+
     def send(self, system: str, messages: list[dict], tools: list[dict],
              max_tokens: int = 4096) -> Turn:
-        kwargs: dict[str, Any] = {
-            "modelId": self.model_id,
-            "system": [{"text": system}],
-            "messages": messages,
-            "inferenceConfig": {"maxTokens": max_tokens},
-        }
-        if tools:
-            kwargs["toolConfig"] = {"tools": self.to_tool_spec(tools)}
 
-        resp = self._client.converse(**kwargs)
+        def build(fold_system: bool) -> dict[str, Any]:
+            kw: dict[str, Any] = {
+                "modelId": self.model_id,
+                "messages": messages,
+                "inferenceConfig": {"maxTokens": max_tokens},
+            }
+            if fold_system:
+                # Prepend the system text to the first user turn. Weaker than a
+                # real system message - the model can treat it as ordinary
+                # conversation - but it is the difference between a degraded
+                # answer and no answer at all.
+                first, rest = messages[0], messages[1:]
+                kw["messages"] = [{
+                    "role": first["role"],
+                    "content": [{"text": system + "\n\n---\n\n" +
+                                 "".join(b.get("text", "") for b in first["content"])}],
+                }] + rest
+            else:
+                kw["system"] = [{"text": system}]
+            if tools:
+                kw["toolConfig"] = {"tools": self.to_tool_spec(tools)}
+            return kw
+
+        try:
+            resp = self._client.converse(**build(self._no_system))
+        except Exception as exc:
+            # Several Bedrock models (the smaller Mistral instruct family among
+            # them) reject a `system` block outright. That is a capability
+            # difference, not a bad request, so retry folded rather than
+            # surfacing a ValidationException the operator cannot act on.
+            if self._no_system or "system message" not in str(exc).lower():
+                raise
+            type(self)._no_system = True
+            resp = self._client.converse(**build(True))
         blocks = resp["output"]["message"]["content"]
         text = "".join(b["text"] for b in blocks if "text" in b)
         calls = [

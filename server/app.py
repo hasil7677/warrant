@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -409,6 +410,132 @@ def api_policy(body: PolicyIn) -> dict:
     s = get_session(body.session)
     (s.dir / "policy.yaml").write_text(body.text, encoding="utf-8")
     return {"ok": True, "session": s.id}
+
+
+DRAFT_SYSTEM = """You edit a YAML policy file for an agent authorization gate.
+
+You will be given the current policy and a plain-English instruction. Return the
+COMPLETE updated YAML file and nothing else. No markdown fences, no commentary,
+no explanation before or after.
+
+Rules you may use under `rules:` - these are the only ones that exist, and a
+rule the gate does not implement causes it to refuse everything:
+
+  recipient_scope:         (no config) recipients must be on the email thread
+  domain_allowlist:        allowed_domains: [list of domains]
+  no_distribution_lists:   blocked_local_parts: [list], blocked_addresses: [list]
+  body_containment:        max_quoted_chars: integer
+  notion_parent_allowlist: allowed_parents: [list of 32-hex page ids]
+  rate_limit:              max_actions_per_day: {tool: integer}, idempotency: bool
+
+Constraints:
+- Keep every rule the user did not ask you to change, with its existing values.
+- Preserve the existing comments where the lines they describe survive.
+- An empty allowlist means NOTHING is allowed, not everything. Never empty one
+  to "open it up" - that closes it.
+- If the instruction is ambiguous or asks for something these rules cannot
+  express, return the policy UNCHANGED with a `# could not apply: <reason>`
+  comment on the first line. Do not invent a rule name to satisfy the request."""
+
+
+class DraftIn(BaseModel):
+    session: Optional[str] = None
+    instruction: str
+
+
+@app.post("/api/draft")
+def api_draft(body: DraftIn) -> dict:
+    """Draft a policy edit from plain English. Returns text; saves nothing.
+
+    This is the one place a model touches the policy, and it is deliberately
+    the weakest possible touch: it returns a string to the editor. The human
+    reads it and presses Save. Nothing here writes the session policy, and
+    nothing anywhere writes the repo's.
+
+    That is the same relationship the rest of the system has with the agent -
+    the model proposes, a human authorizes - applied one level up, to the rules
+    themselves. A draft that saved itself would be the model granting itself
+    permission, which is the exact thing this project exists to prevent.
+    """
+    s = get_session(body.session)
+    current = (s.dir / "policy.yaml").read_text(encoding="utf-8") \
+        if (s.dir / "policy.yaml").exists() else ""
+
+    instruction = (body.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="Say what you want changed.")
+
+    try:
+        from warrant.llm import build_backend
+
+        backend = build_backend()
+        turn = backend.send(
+            DRAFT_SYSTEM,
+            [backend.user_turn(
+                f"Current policy:\n\n{current}\n\n"
+                f"Instruction: {instruction}\n\n"
+                "Return the complete updated YAML."
+            )],
+            tools=[],
+            max_tokens=3000,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Model backend unavailable ({type(exc).__name__}: {exc}). "
+                   "The policy is unchanged - edit it by hand.",
+        )
+
+    text = (turn.text or "").strip()
+    # Models wrap YAML in fences even when told not to. Strip rather than fail:
+    # the human is about to read this anyway, and a fence is not a reason to
+    # throw away an otherwise good draft.
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+
+    # Parse before returning. A draft that cannot load is worse than no draft:
+    # the operator would paste it, press Save, and every action would be
+    # refused as policy_unreadable with no obvious cause.
+    try:
+        parsed = yaml.safe_load(text)
+        if not isinstance(parsed, dict) or "rules" not in parsed:
+            raise ValueError("result has no `rules:` block")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The model returned something that is not a usable policy "
+                   f"({exc}). Nothing was changed.",
+        )
+
+    known = set(policy_mod.RULES)
+    unknown = sorted(set(parsed.get("rules") or {}) - known)
+
+    # A diff, not just the new file. Asked to BLOCK a domain, a small model was
+    # observed adding it to allowed_domains instead - the exact opposite - and
+    # that is invisible if the human is handed ninety lines of YAML and told to
+    # look it over. Review is only review when the thing to review is small.
+    import difflib
+
+    diff = [
+        ln for ln in difflib.unified_diff(
+            current.splitlines(), text.splitlines(),
+            fromfile="current", tofile="draft", lineterm="", n=0)
+        if ln.startswith(("+", "-")) and not ln.startswith(("+++", "---"))
+    ]
+
+    return {
+        "ok": True,
+        "session": s.id,
+        "policy": text,
+        "diff": diff[:40],
+        "model": backend.model_id,
+        "warning": (
+            f"Names a rule the gate does not implement: {unknown}. "
+            "Saving this will refuse everything."
+        ) if unknown else None,
+    }
 
 
 @app.post("/api/reset")
