@@ -1,5 +1,5 @@
 """
-warrant — an agent proposes, a declarative policy authorizes, and the gate
+warrant - an agent proposes, a declarative policy authorizes, and the gate
 holds the credentials so the model never does.
 
 Loading `.env` happens here, at package import, rather than inside `auth.py`.

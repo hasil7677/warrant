@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>warrant — policy gate console</title>
+<meta http-equiv="Cache-Control" content="no-store">
+<title>warrant - policy gate console</title>
 <style>
   :root{
     --bg:#0c0d10; --panel:#131519; --line:#23262d; --ink:#e7e9ee; --dim:#8b929f;
@@ -13,46 +14,65 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:14px/1.55 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif}
-  header{display:flex;align-items:center;gap:14px;padding:14px 20px;
+
+  header{display:flex;align-items:center;gap:12px;padding:12px 20px;
          border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
-  h1{font-size:15px;margin:0;font-weight:640;letter-spacing:-.01em}
-  .tag{font:11px/1 var(--mono);color:var(--dim);border:1px solid var(--line);
-       padding:5px 9px;border-radius:999px}
+  h1{font-size:15px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .sub{font-size:12px;color:var(--dim)}
   .spacer{flex:1}
   button{font:inherit;font-size:13px;font-weight:560;color:var(--ink);cursor:pointer;
          background:#1c1f26;border:1px solid var(--line);padding:8px 14px;border-radius:8px}
   button:hover:not(:disabled){background:#232730;border-color:#333843}
   button:disabled{opacity:.4;cursor:not-allowed}
-  button.primary{background:var(--mint);color:#06240f;border-color:var(--mint)}
+  button.primary{background:var(--mint);color:#06240f;border-color:var(--mint);font-weight:650}
   button.primary:hover:not(:disabled){background:#6ee7ad}
   label.chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);
             cursor:pointer;user-select:none}
-  main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:0;
-       height:calc(100vh - 57px)}
+
+  .howto{display:flex;border-bottom:1px solid var(--line);background:#0e1014;
+         font-size:12.5px;overflow-x:auto}
+  .howto div{padding:11px 18px;color:var(--dim);border-right:1px solid var(--line);
+             white-space:nowrap}
+  .howto b{color:var(--ink);font-weight:600}
+  .howto .n{display:inline-block;width:18px;height:18px;text-align:center;
+            border-radius:50%;background:#23262d;color:var(--mint);
+            font:600 11px/18px var(--mono);margin-right:7px}
+
+  main{display:grid;grid-template-columns:minmax(320px,400px) 1fr;
+       height:calc(100vh - 100px)}
   @media (max-width:900px){main{grid-template-columns:1fr;height:auto}}
   .col{overflow-y:auto;padding:16px 18px}
   .col.left{border-right:1px solid var(--line);background:#0e1014}
   h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
-     margin:0 0 9px;font-weight:620}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-        padding:12px 13px;margin-bottom:14px}
-  textarea{width:100%;height:290px;background:#0a0b0e;color:#cdd3dd;border:1px solid var(--line);
-           border-radius:8px;padding:11px;font:12px/1.6 var(--mono);resize:vertical;
-           tab-size:2;outline:none}
+     margin:0 0 4px;font-weight:650}
+  .cap{font-size:12px;color:var(--dim);margin:0 0 10px}
+
+  .quick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}
+  button.q{font-size:11.5px;padding:6px 10px;border-radius:7px}
+  button.q code{font:11px/1 var(--mono);color:var(--amber)}
+  textarea{width:100%;height:300px;background:#0a0b0e;color:#cdd3dd;
+           border:1px solid var(--line);border-radius:8px;padding:11px;
+           font:12px/1.6 var(--mono);resize:vertical;tab-size:2;outline:none;display:block}
   textarea:focus{border-color:#3a4150}
-  .hint{font-size:11.5px;color:var(--dim);margin:8px 0 0}
-  .thread{font-size:12.5px}
-  .thread .who{font:11.5px/1.5 var(--mono);color:var(--mint)}
-  .thread .body{color:var(--dim);margin-top:6px;font-size:12px;
-                border-left:2px solid var(--line);padding-left:9px}
-  .ledgers{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:15px}
+  .flash{animation:flash 1.1s ease}
+  @keyframes flash{0%{border-color:var(--amber);box-shadow:0 0 0 3px rgba(232,180,74,.16)}
+                   100%{border-color:var(--line);box-shadow:none}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:12px 13px;margin-bottom:10px}
+  .who{font:11.5px/1.6 var(--mono);color:var(--mint)}
+  .bodytext{color:var(--dim);margin-top:7px;font-size:12px;
+            border-left:2px solid var(--line);padding-left:9px}
+
+  .ledgers{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:6px}
   .led{background:var(--panel);border:1px solid var(--line);border-radius:10px;
        padding:11px 12px;text-align:center;transition:border-color .25s,background .25s}
-  .led .n{font:600 25px/1.15 var(--mono)}
-  .led .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;
-          margin-top:2px}
+  .led .n{font:650 26px/1.15 var(--mono)}
+  .led .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;
+          letter-spacing:.07em;margin-top:2px}
   .led.hot{border-color:var(--mint);background:#0f1d16}
   .led.hot .n{color:var(--mint)}
+
   .step{border:1px solid var(--line);border-left-width:3px;border-radius:9px;
         background:var(--panel);padding:12px 14px;margin-bottom:10px;
         animation:in .28s ease both}
@@ -60,150 +80,141 @@
   .step.allow{border-left-color:var(--mint)}
   .step.deny{border-left-color:var(--red)}
   .step .top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-  .verdict{font:600 10.5px/1 var(--mono);padding:5px 8px;border-radius:5px;letter-spacing:.04em}
+  .verdict{font:650 10.5px/1 var(--mono);padding:5px 8px;border-radius:5px;letter-spacing:.04em}
   .verdict.allow{background:#12301f;color:var(--mint)}
   .verdict.deny{background:#341614;color:var(--red)}
   .tool{font:12px/1 var(--mono);color:var(--blue)}
   .label{font-size:12.5px;color:var(--dim);margin-left:auto}
   .intent{font-size:12.5px;color:#b9c0cc;margin:9px 0 0;font-style:italic}
-  .intent::before{content:'agent  ';font-style:normal;font-family:var(--mono);
-                  font-size:10.5px;color:var(--violet)}
+  .intent b{color:var(--violet);font-style:normal;font-family:var(--mono);
+            font-size:10.5px;font-weight:600;margin-right:7px}
   .rules{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
   .rule{font:11px/1 var(--mono);background:#2a1d14;color:var(--amber);
         padding:5px 8px;border-radius:5px;border:1px solid #3d2a18}
   .reason{font-size:12px;color:var(--dim);margin-top:8px;
           border-left:2px solid var(--line);padding-left:9px}
   .eid{font:11px/1 var(--mono);color:var(--mint);margin-top:8px}
-  .empty{color:var(--dim);font-size:13px;text-align:center;padding:52px 20px;
+  .empty{color:var(--dim);font-size:13px;text-align:center;padding:48px 20px;
          border:1px dashed var(--line);border-radius:10px}
+  .err{background:#2a1414;border:1px solid var(--red);color:#f6a9a3;border-radius:9px;
+       padding:12px 14px;font-size:12.5px;margin-bottom:10px}
   .note{font-size:11.5px;color:var(--dim);margin-top:14px;padding-top:12px;
         border-top:1px solid var(--line)}
   .mode{font:11px/1 var(--mono);padding:5px 9px;border-radius:999px;
         border:1px solid var(--line);color:var(--amber)}
-  .quick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}
-  button.q{font-size:11px;padding:6px 9px;border-radius:7px}
-  button.q code{font:11px/1 var(--mono);color:var(--amber)}
-  .flash{animation:flash 1.1s ease}
-  @keyframes flash{0%{border-color:var(--amber);box-shadow:0 0 0 3px rgba(232,180,74,.16)}
-                   100%{border-color:var(--line);box-shadow:none}}
   .mode.live{color:var(--red);border-color:var(--red);background:#2a1414}
-  .err{background:#2a1414;border:1px solid var(--red);color:#f6a9a3;border-radius:9px;
-       padding:12px 14px;font-size:12.5px;margin-bottom:10px}
-  .eid a{color:var(--mint)}
 </style>
 </head>
 <body>
 <header>
   <h1>warrant</h1>
-  <span class="tag">the agent proposes · the policy authorizes</span>
+  <span class="sub">an AI agent proposes actions. a rules file decides which ones happen.</span>
   <span class="spacer"></span>
-  <label class="chk" title="Act on your real Gmail, Calendar and Notion"><input type="checkbox" id="live"> <span id="mode" class="mode">apps: fakes</span></label>
+  <label class="chk" title="Act on real Gmail, Calendar and Notion">
+    <input type="checkbox" id="live"> <span id="mode" class="mode">apps: fakes</span></label>
   <label class="chk"><input type="checkbox" id="ks"> kill switch</label>
-  <label class="chk"><input type="checkbox" id="nopol"> no policy file</label>
+  <label class="chk"><input type="checkbox" id="nopol"> delete policy</label>
   <button id="save">Save policy</button>
   <button id="run" class="primary">Run scenario</button>
 </header>
 
+<div class="howto">
+  <div><span class="n">1</span>Press <b>Run scenario</b>. Nine proposed actions get decided, one at a time.</div>
+  <div><span class="n">2</span>Green means it happened. Red means the gate stopped it.</div>
+  <div><span class="n">3</span>Change a rule on the left, <b>Save</b>, then <b>Run</b> again. Watch a verdict flip.</div>
+</div>
+
 <main>
   <section class="col left">
-    <h2>policy.yaml — a human wrote this</h2>
+    <h2>the rules file</h2>
+    <p class="cap">A human writes this. No code in the project can create or edit it.
+      Your edits here stay in a temporary copy.</p>
     <div class="quick">
-      <button class="q" id="q-quote">toggle the <code>body_containment</code> rule</button>
-      <button class="q" id="q-parent">toggle <code>allowed_parents</code></button>
-      <button class="q" id="q-reset">reset policy</button>
+      <button class="q" id="q-quote">turn off <code>body_containment</code></button>
+      <button class="q" id="q-parent">turn off <code>allowed_parents</code></button>
+      <button class="q" id="q-reset">reset</button>
     </div>
     <textarea id="policy" spellcheck="false"></textarea>
-    <p class="hint">Edit a rule, hit <b>Save policy</b>, then <b>Run scenario</b> and watch a
-      verdict change. Edits land in a session sandbox — the repo's policy is never written.</p>
 
-    <h2 style="margin-top:20px">the thread the broker read</h2>
-    <div class="card thread">
-      <div class="who" id="participants"></div>
-      <div class="body" id="threadbody"></div>
+    <h2 style="margin-top:20px">the email thread</h2>
+    <p class="cap">Read from Gmail by the broker, not written by the model.
+      The agent can only email people on this list.</p>
+    <div class="card">
+      <div class="who" id="participants">loading...</div>
+      <div class="bodytext" id="threadbody"></div>
     </div>
-    <p class="hint">This participant list is the trust anchor. It came from the Gmail API,
-      not from the model — which is why "recipients ⊆ participants" means something.</p>
   </section>
 
   <section class="col">
     <h2>actions that actually reached an app</h2>
+    <p class="cap">These only move when the gate allows something.
+      A refusal leaves them alone.</p>
     <div class="ledgers">
       <div class="led" id="led-gmail"><div class="n">0</div><div class="k">gmail</div></div>
       <div class="led" id="led-calendar"><div class="n">0</div><div class="k">calendar</div></div>
       <div class="led" id="led-notion"><div class="n">0</div><div class="k">notion</div></div>
     </div>
 
-    <h2>proposals &amp; verdicts</h2>
-    <div id="feed"><div class="empty">Press <b>Run scenario</b>.<br>
-      Nine proposals, decided one at a time.</div></div>
+    <h2 style="margin-top:18px">what the agent asked for, and what the gate said</h2>
+    <div id="feed"><div class="empty">Press <b>Run scenario</b> to start.</div></div>
 
-    <p class="note">Every verdict here is the return value of the real
-      <code>Broker.execute</code> calling the real <code>policy.check</code>. The console has no
-      override control and no path to an app client — a console that could force an action
+    <p class="note">Every verdict here is the real gate deciding. The console has no override
+      control and no way to reach an app on its own: a console that could force an action
       would just be a credential with a nicer font.</p>
   </section>
 </main>
 
 <script>
-let SID = null;
-
+let SID = null, PRISTINE = '';
 const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function boot(){
-  const r = await fetch('/api/session' + (SID ? '?session=' + SID : ''));
-  const d = await r.json();
-  SID = d.session;
-  $('policy').value = d.policy;
-  if (!PRISTINE) PRISTINE = d.policy;
-  $('participants').textContent = d.thread.participants.join('   ·   ');
-  $('threadbody').textContent = d.thread.body;
-  setLedgers(d.ledgers);
+  try{
+    const r = await fetch('/api/session' + (SID ? '?session=' + SID : ''),
+                          {cache:'no-store'});
+    const d = await r.json();
+    SID = d.session;
+    $('policy').value = d.policy;
+    if (!PRISTINE) PRISTINE = d.policy;
+    $('participants').textContent = d.thread.participants.join('    ');
+    $('threadbody').textContent = d.thread.body;
+    setLedgers(d.ledgers);
+  }catch(e){
+    $('participants').textContent = 'could not reach the server';
+    $('feed').innerHTML = '<div class="err">Could not load. Is the server still running?</div>';
+  }
 }
 
 function setLedgers(l){
   for (const k of ['gmail','calendar','notion']){
     const el = $('led-' + k);
-    const n = l[k] < 0 ? '–' : l[k];
-    el.querySelector('.n').textContent = n;
+    el.querySelector('.n').textContent = l[k] < 0 ? '-' : l[k];
     el.classList.toggle('hot', l[k] > 0);
   }
 }
 
-$('save').onclick = async () => {
-  $('save').disabled = true;
-  await fetch('/api/policy', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({session: SID, text: $('policy').value})
-  });
-  $('save').textContent = 'Saved ✓';
-  setTimeout(()=>{ $('save').textContent='Save policy'; $('save').disabled=false; }, 1100);
-};
-
-let PRISTINE = '';
-
 function bump(){
   const t = $('policy');
   t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash');
-  $('save').textContent = 'Save policy ●';
+  $('save').textContent = 'Save policy *';
 }
 
-// Each quick edit rewrites the textarea in place so the change is visible on
-// screen. It is a shortcut for typing, not a shortcut past the gate - you
+// The quick buttons rewrite the textarea in place so the change is visible on
+// screen. They are a shortcut for typing, not a shortcut past the gate: you
 // still press Save, and the gate still reads the file like any other run.
-// Comment the rule out of the `rules:` block, which is what actually disables
-// it - raising max_quoted_chars does NOT, because the window is clamped to the
-// body length (that clamp is the fix for the short-body bug). A quick edit that
-// looked like it disabled a rule without disabling it would be worse than none.
+//
+// body_containment is commented OUT rather than having max_quoted_chars raised,
+// because raising it does not disable the rule (the window is clamped to the
+// body length). A button that looked like it turned a rule off without turning
+// it off would be worse than no button.
 $('q-quote').onclick = () => {
   const t = $('policy');
   t.value = /^\s*body_containment:/m.test(t.value)
-    ? t.value.replace(/^([ 	]*)body_containment:([ 	]*?
-)([ 	]*max_quoted_chars:[^
-]*)/m,
+    ? t.value.replace(/^([ \t]*)body_containment:([ \t]*\r?\n)([ \t]*max_quoted_chars:[^\n]*)/m,
                       '$1# body_containment:$2#$3')
-    : t.value.replace(/^([ 	]*)# body_containment:([ 	]*?
-)[ 	]*#([ 	]*max_quoted_chars:[^
-]*)/m,
+    : t.value.replace(/^([ \t]*)# body_containment:([ \t]*\r?\n)[ \t]*#([ \t]*max_quoted_chars:[^\n]*)/m,
                       '$1body_containment:$2$3');
   bump();
 };
@@ -211,12 +222,9 @@ $('q-quote').onclick = () => {
 $('q-parent').onclick = () => {
   const t = $('policy');
   t.value = /^\s*-\s*"1{32}"/m.test(t.value)
-    ? t.value.replace(/^[ 	]*-[ 	]*"1{32}"[ 	]*?
-/m, '')
-    : t.value.replace(/^([ 	]*)allowed_parents:([ 	]*?
-)/m,
-                      '$1allowed_parents:$2$1  - "11111111111111111111111111111111"
-');
+    ? t.value.replace(/^[ \t]*-[ \t]*"1{32}"[ \t]*\r?\n/m, '')
+    : t.value.replace(/^([ \t]*)allowed_parents:([ \t]*\r?\n)/m,
+                      '$1allowed_parents:$2$1  - "11111111111111111111111111111111"\n');
   bump();
 };
 
@@ -224,21 +232,27 @@ $('q-reset').onclick = () => { $('policy').value = PRISTINE; bump(); };
 
 $('live').onchange = () => {
   const on = $('live').checked;
-  $('mode').textContent = on ? 'apps: LIVE — real sends' : 'apps: fakes';
+  $('mode').textContent = on ? 'apps: LIVE, real sends' : 'apps: fakes';
   $('mode').classList.toggle('live', on);
+};
+
+$('save').onclick = async () => {
+  $('save').disabled = true;
+  await fetch('/api/policy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session: SID, text: $('policy').value})
+  });
+  $('save').textContent = 'Saved';
+  setTimeout(()=>{ $('save').textContent='Save policy'; $('save').disabled=false; }, 1100);
 };
 
 $('run').onclick = async () => {
   const live = $('live').checked;
   if (live && !confirm(
-      'LIVE MODE
+      'LIVE MODE\n\nThis performs REAL actions on your Gmail, Calendar and Notion.\n' +
+      'The scenario only targets a thread whose only participant is you, so it ' +
+      'cannot reach anyone else.\n\nContinue?')) return;
 
-This performs REAL actions on your Gmail, Calendar and Notion.
-' +
-      'The scenario only targets a thread whose sole participant is you, so it ' +
-      'cannot reach anyone else.
-
-Continue?')) return;
   $('run').disabled = true;
   $('feed').innerHTML = '';
   setLedgers({gmail:0, calendar:0, notion:0});
@@ -253,12 +267,12 @@ Continue?')) return;
   if (!res.ok){
     let msg = 'Request failed.';
     try { msg = (await res.json()).detail || msg; } catch {}
-    $('feed').innerHTML = `<div class="err">${esc(msg)}</div>`;
+    $('feed').innerHTML = '<div class="err">' + esc(msg) + '</div>';
     $('run').disabled = false; return;
   }
 
-  // Parse the SSE stream by hand: fetch() gives a byte stream, and events can
-  // split across chunks, so hold a buffer and only consume complete frames.
+  // Parse SSE by hand: events can split across chunks, so hold a buffer and
+  // only consume complete frames.
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -272,8 +286,7 @@ Continue?')) return;
       if (!frame.startsWith('data: ')) continue;
       const d = JSON.parse(frame.slice(6));
       if (d.done){ setLedgers(d.ledgers); continue; }
-      render(d);
-      setLedgers(d.ledgers);
+      render(d); setLedgers(d.ledgers);
     }
   }
   $('run').disabled = false;
@@ -282,26 +295,23 @@ Continue?')) return;
 function render(d){
   const el = document.createElement('div');
   el.className = 'step ' + (d.allowed ? 'allow' : 'deny');
-  const rules = (d.rule_ids||[]).map(r => `<span class="rule">${esc(r)}</span>`).join('');
+  const rules = (d.rule_ids||[]).map(r => '<span class="rule">' + esc(r) + '</span>').join('');
   const reason = (d.reasons||[])[0];
-  el.innerHTML = `
-    <div class="top">
-      <span class="verdict ${d.allowed?'allow':'deny'}">${d.allowed?'EXECUTED':'REFUSED'}</span>
-      <span class="tool">${esc(d.proposal.tool)}</span>
-      <span class="label">${esc(d.label)}</span>
-    </div>
-    <p class="intent">${esc(d.intent)}</p>
-    ${rules ? `<div class="rules">${rules}</div>` : ''}
-    ${reason && !d.allowed ? `<div class="reason">${esc(reason)}</div>` : ''}
-    ${d.external_id ? `<div class="eid">→ ${esc(d.external_id)}${
-        d.live ? ' <span style="color:var(--dim)">· real object, verifiable in the app</span>' : ''
-      }</div>` : ''}`;
+  el.innerHTML =
+    '<div class="top">' +
+      '<span class="verdict ' + (d.allowed?'allow':'deny') + '">' +
+        (d.allowed ? 'HAPPENED' : 'STOPPED') + '</span>' +
+      '<span class="tool">' + esc(d.proposal.tool) + '</span>' +
+      '<span class="label">' + esc(d.label) + '</span>' +
+    '</div>' +
+    '<p class="intent"><b>agent</b>' + esc(d.intent) + '</p>' +
+    (rules ? '<div class="rules">' + rules + '</div>' : '') +
+    (reason && !d.allowed ? '<div class="reason">' + esc(reason) + '</div>' : '') +
+    (d.external_id ? '<div class="eid">created: ' + esc(d.external_id) +
+        (d.live ? ' (real object, check the app)' : '') + '</div>' : '');
   $('feed').appendChild(el);
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
 }
-
-const esc = s => String(s).replace(/[&<>"]/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 boot();
 </script>

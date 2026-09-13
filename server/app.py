@@ -275,7 +275,7 @@ def scenario() -> list[dict]:
 class CountingLive:
     """The real app client, with a counter so the console can show what landed.
 
-    Delegates every attribute to the real module — it adds no capability and
+    Delegates every attribute to the real module - it adds no capability and
     removes none. The counter exists because in live mode the ledger stops
     being a number this process made up and starts being a claim about the
     operator's actual inbox, which is the whole reason live mode is worth

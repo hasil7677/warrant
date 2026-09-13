@@ -23,7 +23,7 @@ legal: &legal
     body: "Thursday 10am works for me."
 
 cases:
-  - name: no policy file — the state a fresh clone is in
+  - name: no policy file - the state a fresh clone is in
     thread: *thread
     delete_policy: true
     proposal: *legal
@@ -56,7 +56,7 @@ cases:
       decision: DENY
       rule: kill_switch
 
-  - name: no thread id — nothing to scope recipients against
+  - name: no thread id - nothing to scope recipients against
     proposal:
       tool: gmail.send
       params:

@@ -4,7 +4,7 @@ mutate.py
 Breaks the gate on purpose and checks that the test suite notices.
 
 A passing test suite proves the code does something. It does not prove the
-tests would fail if the code were wrong — and that is the actual question when
+tests would fail if the code were wrong - and that is the actual question when
 someone claims "127 tests pass". A suite of assertions that can never fail is
 indistinguishable from a suite that works, right up until it matters.
 
@@ -15,7 +15,7 @@ the script exits non-zero so CI treats it as a failure rather than a curiosity.
 Two details make the output honest rather than decorative:
 
   • **Expected survivors are named per mutation.** Making the gate advisory
-    should NOT break the tests that assert a legal action succeeds — a gate
+    should NOT break the tests that assert a legal action succeeds - a gate
     that allows everything still allows the legal thing. A mutation script
     that demanded every test fail would be measuring the wrong thing, and the
     surviving count is reported rather than hidden.
@@ -129,7 +129,7 @@ def apply(mut: Mutation) -> str:
     original = path.read_text(encoding="utf-8")
     if mut.find not in original:
         raise SystemExit(
-            f"mutation {mut.name!r} no longer matches {mut.file} — the code moved "
+            f"mutation {mut.name!r} no longer matches {mut.file} - the code moved "
             "under it. Update the mutation rather than deleting it; a mutation "
             "that silently stops applying is a test that silently stopped running."
         )
@@ -145,14 +145,14 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    print("\nwarrant — mutation check")
+    print("\nwarrant - mutation check")
     print("=" * 72)
     print("Each row disables one property and reports how many tests noticed.")
     print("A mutation that kills nothing is a hole in the suite.\n")
 
     base_pass, base_fail, _ = run_suite()
     if base_fail:
-        print(f"  baseline is already failing ({base_fail} tests) — fix that first.")
+        print(f"  baseline is already failing ({base_fail} tests) - fix that first.")
         return 2
     print(f"  baseline: {base_pass} passed, 0 failed\n")
 
@@ -185,7 +185,7 @@ def main() -> int:
     final_pass, final_fail, _ = run_suite()
     print(f"  after restore: {final_pass} passed, {final_fail} failed")
     if final_fail:
-        print("  RESTORE FAILED — check git status before trusting this tree.")
+        print("  RESTORE FAILED - check git status before trusting this tree.")
         return 2
 
     if survivors:

@@ -4,7 +4,7 @@ llm.py
 The model backend, behind one small interface.
 
 The gate does not care which model proposes an action, and neither does the
-evidence trail — so the choice of model lives here and nowhere else. Swapping
+evidence trail - so the choice of model lives here and nowhere else. Swapping
 Mistral for Claude changes this file and nothing about what is enforced.
 
 Bedrock's **Converse** API is the transport, because it normalises tool calling

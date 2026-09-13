@@ -233,7 +233,7 @@ def write_report(result: dict, artifact: Path) -> None:
     """Render EVAL.md. Caveats go near the top, not in a footnote."""
     rows = result["rows"]
     L = [
-        "# Evaluation — what the gate did, and what reached the apps",
+        "# Evaluation - what the gate did, and what reached the apps",
         "",
         f"`{artifact.name}` is the machine-readable record of this run; the numbers "
         "below are read from it rather than typed in by hand.",
@@ -248,14 +248,14 @@ def write_report(result: dict, artifact: Path) -> None:
         "",
         "- **The app clients are fakes, and that is the measurement.** Each fake keeps a "
         "ledger of what reached it. A refusal case passes only if the ledger is still "
-        "empty afterwards — a status string alone cannot satisfy it. What this does not "
+        "empty afterwards - a status string alone cannot satisfy it. What this does not "
         "prove is that the real Gmail/Calendar/Notion clients behave identically; that is "
         "what `scripts/smoke.py` is for, and the two are deliberately separate.",
         "- **Expected-allow cases are reported separately on purpose.** An evaluation made "
         "only of refusals is satisfied by a gate that blocks everything. If the allow "
         "column above is empty or failing, the headline number is meaningless.",
         "- **Cases are hand-written, not sampled.** They cover the failure modes the policy "
-        "was designed against, so this is a statement about those modes — not an estimate "
+        "was designed against, so this is a statement about those modes - not an estimate "
         "of behaviour on arbitrary real traffic.",
         "- **The model is not in this loop.** Proposals are supplied directly, so this "
         "measures the gate, not the agent's judgment. That separation is intentional: the "
@@ -277,7 +277,7 @@ def write_report(result: dict, artifact: Path) -> None:
         reached = sum(r["reached_apps"].values())
         L.append(
             f"| {mark} | {r['expect']} | {r['name']} | `{r['status']}` | "
-            f"{', '.join(f'`{x}`' for x in r['rule_ids']) or '—'} | "
+            f"{', '.join(f'`{x}`' for x in r['rule_ids']) or ' - '} | "
             f"{reached}/{r['expected_side_effects']} |"
         )
     L += ["", "## Reproduce", "", "```", "python eval/run.py", "```", ""]
