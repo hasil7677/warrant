@@ -26,10 +26,15 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-# Verified working for tool use on Bedrock. Mistral Large is the default
-# because the smaller instruct models in the family are inconsistent at
-# emitting well-formed tool calls, and an agent that fumbles the tool schema
-# makes the gate look like it is refusing things it is not.
+# Mistral Large 3 is the default, and the gap is not subtle. Asked to block a
+# domain the policy has no rule for, mistral-7b added it to `allowed_domains`
+# and annotated the line "block emails to this domain" - the exact opposite,
+# stated confidently. Large 3 returned the policy unchanged with a
+# `# could not apply:` comment naming the rule that would actually be needed.
+#
+# Both behaviours are survivable here precisely because a human reads the diff
+# before saving. That is the argument for the review step, not a reason to
+# skip it: the small model's answer looks entirely plausible until you read it.
 DEFAULT_MISTRAL = "mistral.mistral-large-3-675b-instruct"
 DEFAULT_CLAUDE = "anthropic.claude-opus-5"
 

@@ -518,12 +518,22 @@ def api_draft(body: DraftIn) -> dict:
     # look it over. Review is only review when the thing to review is small.
     import difflib
 
-    diff = [
+    raw = [
         ln for ln in difflib.unified_diff(
             current.splitlines(), text.splitlines(),
             fromfile="current", tofile="draft", lineterm="", n=0)
         if ln.startswith(("+", "-")) and not ln.startswith(("+++", "---"))
     ]
+
+    # Substantive lines first. A model that reflows the header comment while
+    # changing one cap produces a diff whose real edit is thirty lines down,
+    # and a reviewer who has to scroll to find the change is a reviewer who
+    # stops looking. Comment churn still shows, just under the part that matters.
+    def substantive(ln: str) -> bool:
+        body = ln[1:].strip()
+        return bool(body) and not body.startswith("#")
+
+    diff = [l for l in raw if substantive(l)] + [l for l in raw if not substantive(l)]
 
     return {
         "ok": True,
