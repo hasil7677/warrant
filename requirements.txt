@@ -13,3 +13,7 @@ anthropic>=0.69
 
 PyYAML>=6.0
 pytest>=8.0
+
+# Console (server/) - local web view of the gate.
+fastapi>=0.141
+uvicorn>=0.30

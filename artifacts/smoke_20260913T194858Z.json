@@ -1,0 +1,79 @@
+{
+  "kind": "smoke",
+  "created_utc": "2026-09-13T19:48:58+00:00",
+  "git": {
+    "sha": "297782c5f6f2644e0e8e9e9fdba47154a2d59688",
+    "dirty": true,
+    "dirty_files": [
+      "?? artifacts/smoke_20260913T194107Z.json",
+      "?? artifacts/smoke_20260913T194142Z.json",
+      "?? server/"
+    ]
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "packages": {
+      "anthropic": "1.5.0",
+      "googleapiclient": null,
+      "yaml": "6.0.3"
+    }
+  },
+  "config": {
+    "skipped": {
+      "notion": false,
+      "google": false
+    }
+  },
+  "result": {
+    "steps": [
+      {
+        "step": "google oauth + gmail profile",
+        "status": "PASS",
+        "detail": "dtomsahil@gmail.com"
+      },
+      {
+        "step": "gmail.list_unread",
+        "status": "PASS",
+        "detail": "3 unread thread(s)"
+      },
+      {
+        "step": "gmail.read_thread (trust anchor)",
+        "status": "PASS",
+        "detail": "2 participant(s), 5669 body chars"
+      },
+      {
+        "step": "gmail.send -> self",
+        "status": "PASS",
+        "detail": "message id 1a09c50cbb721fd8"
+      },
+      {
+        "step": "calendar.create_event",
+        "status": "PASS",
+        "detail": "event id j9anerthokc1uch5umd8fj2dtg"
+      },
+      {
+        "step": "calendar read-back verify",
+        "status": "PASS",
+        "detail": "event read back independently"
+      },
+      {
+        "step": "notion.create_page",
+        "status": "PASS",
+        "detail": "page id 3dacd088-d5e2-81d5-94d5-f4688ca82463"
+      },
+      {
+        "step": "notion read-back verify",
+        "status": "PASS",
+        "detail": "page read back independently"
+      }
+    ],
+    "passed": 8,
+    "failed": 0,
+    "apps_live": {
+      "gmail": true,
+      "calendar": true,
+      "notion": true
+    }
+  }
+}

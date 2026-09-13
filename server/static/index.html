@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>warrant — policy gate console</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#131519; --line:#23262d; --ink:#e7e9ee; --dim:#8b929f;
+    --mint:#4ade9a; --red:#f2665e; --amber:#e8b44a; --blue:#6aa8f5; --violet:#a78bfa;
+    --mono:'SF Mono',ui-monospace,'Cascadia Mono','JetBrains Mono',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.55 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;
+         border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+  h1{font-size:15px;margin:0;font-weight:640;letter-spacing:-.01em}
+  .tag{font:11px/1 var(--mono);color:var(--dim);border:1px solid var(--line);
+       padding:5px 9px;border-radius:999px}
+  .spacer{flex:1}
+  button{font:inherit;font-size:13px;font-weight:560;color:var(--ink);cursor:pointer;
+         background:#1c1f26;border:1px solid var(--line);padding:8px 14px;border-radius:8px}
+  button:hover:not(:disabled){background:#232730;border-color:#333843}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--mint);color:#06240f;border-color:var(--mint)}
+  button.primary:hover:not(:disabled){background:#6ee7ad}
+  label.chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);
+            cursor:pointer;user-select:none}
+  main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:0;
+       height:calc(100vh - 57px)}
+  @media (max-width:900px){main{grid-template-columns:1fr;height:auto}}
+  .col{overflow-y:auto;padding:16px 18px}
+  .col.left{border-right:1px solid var(--line);background:#0e1014}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+     margin:0 0 9px;font-weight:620}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:12px 13px;margin-bottom:14px}
+  textarea{width:100%;height:290px;background:#0a0b0e;color:#cdd3dd;border:1px solid var(--line);
+           border-radius:8px;padding:11px;font:12px/1.6 var(--mono);resize:vertical;
+           tab-size:2;outline:none}
+  textarea:focus{border-color:#3a4150}
+  .hint{font-size:11.5px;color:var(--dim);margin:8px 0 0}
+  .thread{font-size:12.5px}
+  .thread .who{font:11.5px/1.5 var(--mono);color:var(--mint)}
+  .thread .body{color:var(--dim);margin-top:6px;font-size:12px;
+                border-left:2px solid var(--line);padding-left:9px}
+  .ledgers{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:15px}
+  .led{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+       padding:11px 12px;text-align:center;transition:border-color .25s,background .25s}
+  .led .n{font:600 25px/1.15 var(--mono)}
+  .led .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;
+          margin-top:2px}
+  .led.hot{border-color:var(--mint);background:#0f1d16}
+  .led.hot .n{color:var(--mint)}
+  .step{border:1px solid var(--line);border-left-width:3px;border-radius:9px;
+        background:var(--panel);padding:12px 14px;margin-bottom:10px;
+        animation:in .28s ease both}
+  @keyframes in{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+  .step.allow{border-left-color:var(--mint)}
+  .step.deny{border-left-color:var(--red)}
+  .step .top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .verdict{font:600 10.5px/1 var(--mono);padding:5px 8px;border-radius:5px;letter-spacing:.04em}
+  .verdict.allow{background:#12301f;color:var(--mint)}
+  .verdict.deny{background:#341614;color:var(--red)}
+  .tool{font:12px/1 var(--mono);color:var(--blue)}
+  .label{font-size:12.5px;color:var(--dim);margin-left:auto}
+  .intent{font-size:12.5px;color:#b9c0cc;margin:9px 0 0;font-style:italic}
+  .intent::before{content:'agent  ';font-style:normal;font-family:var(--mono);
+                  font-size:10.5px;color:var(--violet)}
+  .rules{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+  .rule{font:11px/1 var(--mono);background:#2a1d14;color:var(--amber);
+        padding:5px 8px;border-radius:5px;border:1px solid #3d2a18}
+  .reason{font-size:12px;color:var(--dim);margin-top:8px;
+          border-left:2px solid var(--line);padding-left:9px}
+  .eid{font:11px/1 var(--mono);color:var(--mint);margin-top:8px}
+  .empty{color:var(--dim);font-size:13px;text-align:center;padding:52px 20px;
+         border:1px dashed var(--line);border-radius:10px}
+  .note{font-size:11.5px;color:var(--dim);margin-top:14px;padding-top:12px;
+        border-top:1px solid var(--line)}
+  .mode{font:11px/1 var(--mono);padding:5px 9px;border-radius:999px;
+        border:1px solid var(--line);color:var(--amber)}
+  .mode.live{color:var(--mint);border-color:var(--mint)}
+</style>
+</head>
+<body>
+<header>
+  <h1>warrant</h1>
+  <span class="tag">the agent proposes · the policy authorizes</span>
+  <span class="spacer"></span>
+  <span id="mode" class="mode">apps: fakes</span>
+  <label class="chk"><input type="checkbox" id="ks"> kill switch</label>
+  <label class="chk"><input type="checkbox" id="nopol"> no policy file</label>
+  <button id="save">Save policy</button>
+  <button id="run" class="primary">Run scenario</button>
+</header>
+
+<main>
+  <section class="col left">
+    <h2>policy.yaml — a human wrote this</h2>
+    <textarea id="policy" spellcheck="false"></textarea>
+    <p class="hint">Edit a rule, hit <b>Save policy</b>, then <b>Run scenario</b> and watch a
+      verdict change. Edits land in a session sandbox — the repo's policy is never written.</p>
+
+    <h2 style="margin-top:20px">the thread the broker read</h2>
+    <div class="card thread">
+      <div class="who" id="participants"></div>
+      <div class="body" id="threadbody"></div>
+    </div>
+    <p class="hint">This participant list is the trust anchor. It came from the Gmail API,
+      not from the model — which is why "recipients ⊆ participants" means something.</p>
+  </section>
+
+  <section class="col">
+    <h2>actions that actually reached an app</h2>
+    <div class="ledgers">
+      <div class="led" id="led-gmail"><div class="n">0</div><div class="k">gmail</div></div>
+      <div class="led" id="led-calendar"><div class="n">0</div><div class="k">calendar</div></div>
+      <div class="led" id="led-notion"><div class="n">0</div><div class="k">notion</div></div>
+    </div>
+
+    <h2>proposals &amp; verdicts</h2>
+    <div id="feed"><div class="empty">Press <b>Run scenario</b>.<br>
+      Nine proposals, decided one at a time.</div></div>
+
+    <p class="note">Every verdict here is the return value of the real
+      <code>Broker.execute</code> calling the real <code>policy.check</code>. The console has no
+      override control and no path to an app client — a console that could force an action
+      would just be a credential with a nicer font.</p>
+  </section>
+</main>
+
+<script>
+let SID = null;
+
+const $ = id => document.getElementById(id);
+
+async function boot(){
+  const r = await fetch('/api/session' + (SID ? '?session=' + SID : ''));
+  const d = await r.json();
+  SID = d.session;
+  $('policy').value = d.policy;
+  $('participants').textContent = d.thread.participants.join('   ·   ');
+  $('threadbody').textContent = d.thread.body;
+  setLedgers(d.ledgers);
+}
+
+function setLedgers(l){
+  for (const k of ['gmail','calendar','notion']){
+    const el = $('led-' + k);
+    const n = l[k] < 0 ? '–' : l[k];
+    el.querySelector('.n').textContent = n;
+    el.classList.toggle('hot', l[k] > 0);
+  }
+}
+
+$('save').onclick = async () => {
+  $('save').disabled = true;
+  await fetch('/api/policy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session: SID, text: $('policy').value})
+  });
+  $('save').textContent = 'Saved ✓';
+  setTimeout(()=>{ $('save').textContent='Save policy'; $('save').disabled=false; }, 1100);
+};
+
+$('run').onclick = async () => {
+  $('run').disabled = true;
+  $('feed').innerHTML = '';
+  setLedgers({gmail:0, calendar:0, notion:0});
+
+  const res = await fetch('/api/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session: SID, live:false,
+                          kill_switch: $('ks').checked,
+                          delete_policy: $('nopol').checked})
+  });
+
+  // Parse the SSE stream by hand: fetch() gives a byte stream, and events can
+  // split across chunks, so hold a buffer and only consume complete frames.
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true){
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0){
+      const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+      if (!frame.startsWith('data: ')) continue;
+      const d = JSON.parse(frame.slice(6));
+      if (d.done){ setLedgers(d.ledgers); continue; }
+      render(d);
+      setLedgers(d.ledgers);
+    }
+  }
+  $('run').disabled = false;
+};
+
+function render(d){
+  const el = document.createElement('div');
+  el.className = 'step ' + (d.allowed ? 'allow' : 'deny');
+  const rules = (d.rule_ids||[]).map(r => `<span class="rule">${esc(r)}</span>`).join('');
+  const reason = (d.reasons||[])[0];
+  el.innerHTML = `
+    <div class="top">
+      <span class="verdict ${d.allowed?'allow':'deny'}">${d.allowed?'EXECUTED':'REFUSED'}</span>
+      <span class="tool">${esc(d.proposal.tool)}</span>
+      <span class="label">${esc(d.label)}</span>
+    </div>
+    <p class="intent">${esc(d.intent)}</p>
+    ${rules ? `<div class="rules">${rules}</div>` : ''}
+    ${reason && !d.allowed ? `<div class="reason">${esc(reason)}</div>` : ''}
+    ${d.external_id ? `<div class="eid">→ ${esc(d.external_id)}</div>` : ''}`;
+  $('feed').appendChild(el);
+  el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+boot();
+</script>
+</body>
+</html>

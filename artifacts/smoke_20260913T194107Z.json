@@ -1,0 +1,45 @@
+{
+  "kind": "smoke",
+  "created_utc": "2026-09-13T19:41:07+00:00",
+  "git": {
+    "sha": "297782c5f6f2644e0e8e9e9fdba47154a2d59688",
+    "dirty": false,
+    "dirty_files": []
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "packages": {
+      "anthropic": "1.5.0",
+      "googleapiclient": null,
+      "yaml": "6.0.3"
+    }
+  },
+  "config": {
+    "skipped": {
+      "notion": false,
+      "google": true
+    }
+  },
+  "result": {
+    "steps": [
+      {
+        "step": "google",
+        "status": "SKIP",
+        "detail": "--skip-google"
+      },
+      {
+        "step": "notion.create_page",
+        "status": "FAIL",
+        "detail": "NotionError: Notion API returned 404: {\"object\":\"error\",\"status\":404,\"code\":\"object_not_found\",\"message\":\"Could not find page with ID: 3dacd088-d5e2-80bb-a5e2-f88fd3bb35ce. Make sure the relevant pages and databases are shared with your integration \\\"hackathon\\\".\",\"additional_data\":{\"integration_id\":\"3dacd088-d5e2-8143-a778-00275fb04c7a\"},\"request_id\":\"dc0f87d2-55f2-4ed7-b4a6-445e6b721d7b\"}\nFIX: Notion returns 404 both for a page that does not exist and for one your integration cannot see. If the page exists, open it in Notion and share the page with your integration (the ... menu -> Connections -> add your integration), then retry."
+      }
+    ],
+    "passed": 0,
+    "failed": 1,
+    "apps_live": {
+      "gmail": false,
+      "calendar": false,
+      "notion": false
+    }
+  }
+}

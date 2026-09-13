@@ -1,0 +1,52 @@
+{
+  "kind": "smoke",
+  "created_utc": "2026-09-13T19:41:42+00:00",
+  "git": {
+    "sha": "297782c5f6f2644e0e8e9e9fdba47154a2d59688",
+    "dirty": true,
+    "dirty_files": [
+      "?? artifacts/smoke_20260913T194107Z.json"
+    ]
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "packages": {
+      "anthropic": "1.5.0",
+      "googleapiclient": null,
+      "yaml": "6.0.3"
+    }
+  },
+  "config": {
+    "skipped": {
+      "notion": false,
+      "google": true
+    }
+  },
+  "result": {
+    "steps": [
+      {
+        "step": "google",
+        "status": "SKIP",
+        "detail": "--skip-google"
+      },
+      {
+        "step": "notion.create_page",
+        "status": "PASS",
+        "detail": "page id 3dacd088-d5e2-8173-ba63-d38f3f9d4962"
+      },
+      {
+        "step": "notion read-back verify",
+        "status": "PASS",
+        "detail": "page read back independently"
+      }
+    ],
+    "passed": 2,
+    "failed": 0,
+    "apps_live": {
+      "gmail": false,
+      "calendar": false,
+      "notion": true
+    }
+  }
+}
