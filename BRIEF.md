@@ -28,6 +28,17 @@ The load-bearing detail is **where facts come from**. `Proposal` is what the mod
 
 **The console** (`server/`) is a local web view of the gate deciding, one proposal at a time over SSE. Its purpose is to make the *declarative* half tangible: edit a rule, save, re-run, watch a verdict flip. It cannot bypass the gate - every action goes through `Broker.execute` exactly as the CLI and tests do, there is no override control, and policy edits land in a per-session sandbox rather than the repo's file. A live toggle points it at real Gmail, Calendar and Notion; the header states which set of apps is in use at all times, because a demo where you cannot tell fakes from live calls proves nothing.
 
+The console also drafts policy from plain English. That is the one place a model
+touches the rules file, and it is deliberately the weakest possible touch: the
+endpoint returns a string into the editor alongside a diff and writes nothing. A
+human reads it and saves. The same relationship the agent has with the gate,
+applied one level up to the rules themselves - because a policy the agent can
+author for itself is not consent. The diff earns its place: asked to block a
+domain the rules cannot express, a small model added it to the allowlist and
+annotated the line as a block, while the larger one declined and named the rule
+that would be needed. Handed ninety lines of YAML nobody catches that; handed one
+red line and one green line, everybody does.
+
 In live mode the scenario only acts on a thread whose sole participant is the operator, so it cannot reach a third party even if the policy were edited to allow it - there is nobody else on the thread to scope to. That safety property is in the *selection*, deliberately: the gate is the thing under test, so it must not also be the thing keeping the demo safe.
 
 ### Workflow

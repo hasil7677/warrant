@@ -29,7 +29,7 @@ Three, all reached only through the broker, all proven live (8/8, every write re
 The model backend is **Mistral Large via AWS Bedrock** (Converse API); `WARRANT_MODEL` switches families.
 
 ```
-python server/app.py         # the console -> http://127.0.0.1:8000
+python scripts/serve.py      # the console -> http://127.0.0.1:8000
 python demo/demo.py          # 70 seconds, no credentials, no network
 python -m pytest tests/ -q   # 127 tests
 python eval/run.py           # 20 cases -> EVAL.md + a stamped artifact
@@ -49,9 +49,29 @@ prompt changed, no redeploy, no model involved - a human edited one line and the
 agent's permissions changed. Two header toggles turn on the kill switch or delete
 the policy file, and both turn the entire run red, legal actions included.
 
+A **live toggle** points it at real Gmail, Calendar and Notion instead of fakes;
+the header says which set is in use at all times. In live mode the scenario only
+acts on a thread whose sole participant is you, so it cannot reach a third party
+even if the policy were edited to allow it.
+
+You can also **describe a rule change in plain English** and a model drafts the
+YAML. It lands in the editor with a diff, and it is not saved. You read it and
+press Save: the model proposes, a human authorizes, exactly like the agent and
+the gate one level down. A policy the agent can write for itself is not consent.
+
+That review step is not a formality. Asked to block a domain the rules cannot
+express, `mistral-7b` added it to `allowed_domains` and labelled the line
+"block emails to this domain" - the exact opposite, stated confidently.
+`mistral-large-3` left the policy alone and named the rule that would actually
+be needed. The diff is what makes the difference visible.
+
 The console cannot bypass the gate. Every action goes through `Broker.execute`
 exactly as the CLI and the tests do, there is no override control, and edits land
 in a per-session sandbox rather than the repo's `policy.yaml`.
+
+Start it with `scripts/serve.py` rather than bare `uvicorn`: uvicorn will not
+replace a process already holding the port, and silently leaves the old one
+serving while every health check still returns 200.
 
 ---
 
