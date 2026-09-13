@@ -1,0 +1,15 @@
+# Google user-consent OAuth (installed-app flow) + Gmail/Calendar clients.
+# Deliberately NOT a service account: this agent acts as a specific human,
+# and domain-wide delegation would be a larger grant than the demo needs.
+google-auth>=2.35
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.140
+
+# Notion is plain REST - no SDK, one less dependency to explain.
+requests>=2.32
+
+# The proposal loop.
+anthropic>=0.69
+
+PyYAML>=6.0
+pytest>=8.0

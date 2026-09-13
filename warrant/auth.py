@@ -1,0 +1,156 @@
+"""
+auth.py
+───────
+The credential boundary. This module, and the broker that calls it, are the
+only places a token exists.
+
+Two deliberate choices worth stating, because both are the kind of thing a
+reviewer should be able to check rather than take on faith:
+
+  • **User-consent OAuth, not a service account.** The agent acts as one
+    specific human on their own mailbox. A service account with domain-wide
+    delegation would be a standing grant over every mailbox in a workspace -
+    a far larger blast radius than this demo needs, and one that cannot be
+    revoked by the person actually affected.
+  • **Least privilege, split read from write.** `gmail.readonly` and
+    `gmail.send` are requested separately rather than taking `gmail.modify`,
+    which would also let the agent delete mail. Nothing in this project
+    deletes anything, so nothing in this project asks for the ability to.
+
+The model never calls anything here. `get_google_creds()` is imported by the
+app clients, which are importable only from the broker - and there is a test
+that fails if any other module imports them.
+
+Setup (once):
+    1. console.cloud.google.com -> new project -> enable Gmail API + Calendar API
+    2. OAuth consent screen -> External -> add yourself under "Test users"
+    3. Credentials -> Create -> OAuth client ID -> Desktop app -> download JSON
+    4. Save it as client_secret.json in this directory
+    5. python -m warrant.auth
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar.events",
+]
+
+CLIENT_SECRET_FILE = Path(os.getenv("WARRANT_CLIENT_SECRET", "client_secret.json"))
+TOKEN_FILE = Path(os.getenv("WARRANT_TOKEN_FILE", "token.json"))
+
+
+class AuthError(RuntimeError):
+    """Credentials are missing or unusable. The message says what to fix.
+
+    Raised rather than returning None: a caller that gets None tends to carry
+    on and fail somewhere confusing, and a credential problem should stop the
+    run at the point it is discoverable.
+    """
+
+
+def get_google_creds():
+    """Return usable Google credentials, refreshing or minting them as needed.
+
+    Order: cached token -> silent refresh -> browser consent. The browser step
+    is interactive by necessity, so it only happens when there is no other way.
+    """
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+    except ImportError as exc:  # pragma: no cover - import guard
+        raise AuthError(
+            "Google client libraries are missing. Run:\n"
+            "  pip install google-auth google-auth-oauthlib google-api-python-client"
+        ) from exc
+
+    creds = None
+    if TOKEN_FILE.exists():
+        try:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+        except (ValueError, OSError):
+            # A corrupt or scope-mismatched token is not worth guessing about -
+            # drop it and re-consent rather than half-using it.
+            creds = None
+
+    if creds and creds.valid:
+        return creds
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+            return creds
+        except Exception:
+            creds = None  # fall through to a fresh consent
+
+    if not CLIENT_SECRET_FILE.exists():
+        raise AuthError(
+            f"No OAuth client at {CLIENT_SECRET_FILE.resolve()}.\n"
+            "  1. console.cloud.google.com -> enable the Gmail API and the Calendar API\n"
+            "  2. OAuth consent screen -> External -> add your own address under 'Test users'\n"
+            "  3. Credentials -> Create credentials -> OAuth client ID -> Desktop app\n"
+            f"  4. Download the JSON and save it as {CLIENT_SECRET_FILE}"
+        )
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
+    creds = flow.run_local_server(port=0)
+    TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+    return creds
+
+
+def notion_token() -> str:
+    """The Notion integration token, from the environment only.
+
+    Never read from a file the package could write, and never accepted as a
+    function argument - a credential that can be passed in is a credential the
+    model can supply.
+    """
+    token = os.getenv("NOTION_API_KEY", "").strip()
+    if not token:
+        raise AuthError(
+            "NOTION_API_KEY is not set.\n"
+            "  1. notion.so/my-integrations -> New integration -> copy the Internal Integration Secret\n"
+            "  2. Open the target Notion page -> ... -> Connections -> add your integration\n"
+            "  3. set NOTION_API_KEY=<secret>   (PowerShell: $env:NOTION_API_KEY='<secret>')"
+        )
+    return token
+
+
+def anthropic_key() -> str:
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise AuthError("ANTHROPIC_API_KEY is not set.")
+    return key
+
+
+def main() -> int:
+    print("\nwarrant - credential setup")
+    print("-" * 52)
+    try:
+        creds = get_google_creds()
+        print(f"  google   OK   token cached at {TOKEN_FILE}")
+        print(f"           scopes: {len(SCOPES)} (gmail.readonly, gmail.send, calendar.events)")
+        print(f"           valid={creds.valid}")
+    except AuthError as exc:
+        print(f"  google   FAIL\n{exc}")
+        return 1
+
+    for label, fn in (("notion", notion_token), ("anthropic", anthropic_key)):
+        try:
+            fn()
+            print(f"  {label:<8} OK   key present in environment")
+        except AuthError as exc:
+            print(f"  {label:<8} FAIL {str(exc).splitlines()[0]}")
+
+    print("\nNext: python scripts/smoke.py\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

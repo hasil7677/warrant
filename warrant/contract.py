@@ -1,0 +1,109 @@
+"""
+contract.py
+───────────
+The shapes every other module agrees on. Nothing here imports anything else in
+the package, and nothing here executes anything - it is the vocabulary, not the
+machinery.
+
+The one idea this file encodes: a Proposal is a *claim by the model*, and
+ThreadFacts is *what the broker read for itself*. Every interesting policy rule
+is a comparison between the two. Keeping them in separate types means a rule
+can never accidentally trust the model's version of a fact - it has to reach
+into the object that came from the API.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+# ── the tool surface ────────────────────────────────────────────────────────
+# Three apps, five actions. Read actions are not proposals - the broker performs
+# them itself to build ThreadFacts, because a read is how trust enters the
+# system and the model does not get to narrate it.
+
+GMAIL_SEND = "gmail.send"
+CALENDAR_CREATE_EVENT = "calendar.create_event"
+NOTION_CREATE_PAGE = "notion.create_page"
+
+ACTIONS = (GMAIL_SEND, CALENDAR_CREATE_EVENT, NOTION_CREATE_PAGE)
+
+# Param keys each action accepts. The gate rejects unknown keys outright rather
+# than ignoring them: an unknown key is either a typo or an attempt to reach a
+# code path the policy was never written against.
+ACTION_PARAMS: dict[str, set[str]] = {
+    GMAIL_SEND: {"to", "cc", "bcc", "subject", "body", "in_reply_to"},
+    CALENDAR_CREATE_EVENT: {"summary", "start_iso", "end_iso", "attendees", "description"},
+    NOTION_CREATE_PAGE: {"parent_id", "title", "body_md"},
+}
+
+
+@dataclass(frozen=True)
+class Proposal:
+    """What the model wants to do. Untrusted by construction.
+
+    `rationale` is recorded in the journal and never read by the gate. A reason
+    is not a permission, and a gate that reads the model's justification is a
+    gate the model can argue with.
+    """
+
+    tool: str
+    params: dict[str, Any]
+    thread_id: Optional[str] = None
+    rationale: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tool": self.tool,
+            "params": self.params,
+            "thread_id": self.thread_id,
+            "rationale": self.rationale,
+        }
+
+
+@dataclass(frozen=True)
+class ThreadFacts:
+    """What the broker read from Gmail itself. The trust anchor.
+
+    `participants` is the authoritative recipient set: every address that
+    appeared in From/To/Cc across the thread, as the API reported them. Policy
+    rules scope outbound recipients to this set, which is why it must never be
+    populated from anything the model said.
+    """
+
+    thread_id: str
+    participants: list[str] = field(default_factory=list)
+    subject: str = ""
+    body_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_id": self.thread_id,
+            "participants": self.participants,
+            "subject": self.subject,
+            "body_len": len(self.body_text),
+        }
+
+
+@dataclass
+class Verdict:
+    """The gate's answer. `allowed` is the only field the broker may branch on.
+
+    `rule_ids` names which policy rules fired, so a refusal in the log can be
+    traced back to a line in policy.yaml rather than to a sentence someone
+    wrote in an f-string.
+    """
+
+    allowed: bool
+    reasons: list[str] = field(default_factory=list)
+    rule_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"allowed": self.allowed, "reasons": self.reasons, "rule_ids": self.rule_ids}
+
+
+# Status strings the broker returns. REJECTED is deliberately loud and
+# deliberately not a synonym for "error" - a refusal is the system working.
+STATUS_EXECUTED = "EXECUTED"
+STATUS_REJECTED = "REJECTED_BY_POLICY_GATE"
+STATUS_ERROR = "ERROR"

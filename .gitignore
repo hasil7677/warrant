@@ -1,0 +1,18 @@
+# credentials - never commit these
+client_secret.json
+token.json
+.env
+service_account.json
+
+# runtime state
+.warrant/
+KILL_SWITCH
+
+# the policy file is the USER's, and is deliberately absent from the repo:
+# a fresh clone must refuse every action until a human writes one.
+policy.yaml
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
