@@ -354,6 +354,12 @@ class Session:
                 "notion": self.notion.count if self.live else len(self.notion.pages)}
 
 
+# Identifies this server process. A page loaded from an earlier process is
+# running earlier JavaScript, which is how a fixed bug appears to still be
+# there: the fix shipped, the tab did not reload, and the screenshot shows
+# behaviour the code no longer has. The page checks this and reloads itself.
+BOOT_ID = uuid.uuid4().hex[:8]
+
 SESSIONS: dict[str, Session] = {}
 app = FastAPI(title="warrant console")
 
@@ -392,6 +398,7 @@ class RunIn(BaseModel):
 def api_session(session: Optional[str] = None) -> dict:
     s = get_session(session)
     return {
+        "boot": BOOT_ID,
         "session": s.id,
         "policy": (s.dir / "policy.yaml").read_text(encoding="utf-8")
         if (s.dir / "policy.yaml").exists() else "",
@@ -655,7 +662,12 @@ def api_journal(session: Optional[str] = None, limit: int = 50) -> dict:
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+    # no-store, or the browser serves a cached page against a new process.
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate",
+                 "Pragma": "no-cache"},
+    )
 
 
 if __name__ == "__main__":

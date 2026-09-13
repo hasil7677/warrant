@@ -184,7 +184,7 @@
 </main>
 
 <script>
-let SID = null, PRISTINE = '';
+let SID = null, PRISTINE = '', BOOT = null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -194,6 +194,11 @@ async function boot(){
     const r = await fetch('/api/session' + (SID ? '?session=' + SID : ''),
                           {cache:'no-store'});
     const d = await r.json();
+    // If the server restarted since this page loaded, the page is running old
+    // JavaScript against a new server. Reload once rather than let someone
+    // debug a bug that was already fixed.
+    if (BOOT && d.boot && d.boot !== BOOT){ location.reload(true); return; }
+    BOOT = d.boot;
     SID = d.session;
     $('policy').value = d.policy;
     if (!PRISTINE) PRISTINE = d.policy;
@@ -381,6 +386,8 @@ function render(d){
 }
 
 boot();
+// Cheap liveness check: catches a server restart while the tab sits open.
+setInterval(() => { if (!$('run').disabled) boot(); }, 15000);
 </script>
 </body>
 </html>
