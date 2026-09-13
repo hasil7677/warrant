@@ -80,6 +80,12 @@
         border-top:1px solid var(--line)}
   .mode{font:11px/1 var(--mono);padding:5px 9px;border-radius:999px;
         border:1px solid var(--line);color:var(--amber)}
+  .quick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}
+  button.q{font-size:11px;padding:6px 9px;border-radius:7px}
+  button.q code{font:11px/1 var(--mono);color:var(--amber)}
+  .flash{animation:flash 1.1s ease}
+  @keyframes flash{0%{border-color:var(--amber);box-shadow:0 0 0 3px rgba(232,180,74,.16)}
+                   100%{border-color:var(--line);box-shadow:none}}
   .mode.live{color:var(--red);border-color:var(--red);background:#2a1414}
   .err{background:#2a1414;border:1px solid var(--red);color:#f6a9a3;border-radius:9px;
        padding:12px 14px;font-size:12.5px;margin-bottom:10px}
@@ -101,6 +107,11 @@
 <main>
   <section class="col left">
     <h2>policy.yaml — a human wrote this</h2>
+    <div class="quick">
+      <button class="q" id="q-quote">toggle the <code>body_containment</code> rule</button>
+      <button class="q" id="q-parent">toggle <code>allowed_parents</code></button>
+      <button class="q" id="q-reset">reset policy</button>
+    </div>
     <textarea id="policy" spellcheck="false"></textarea>
     <p class="hint">Edit a rule, hit <b>Save policy</b>, then <b>Run scenario</b> and watch a
       verdict change. Edits land in a session sandbox — the repo's policy is never written.</p>
@@ -143,6 +154,7 @@ async function boot(){
   const d = await r.json();
   SID = d.session;
   $('policy').value = d.policy;
+  if (!PRISTINE) PRISTINE = d.policy;
   $('participants').textContent = d.thread.participants.join('   ·   ');
   $('threadbody').textContent = d.thread.body;
   setLedgers(d.ledgers);
@@ -166,6 +178,49 @@ $('save').onclick = async () => {
   $('save').textContent = 'Saved ✓';
   setTimeout(()=>{ $('save').textContent='Save policy'; $('save').disabled=false; }, 1100);
 };
+
+let PRISTINE = '';
+
+function bump(){
+  const t = $('policy');
+  t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash');
+  $('save').textContent = 'Save policy ●';
+}
+
+// Each quick edit rewrites the textarea in place so the change is visible on
+// screen. It is a shortcut for typing, not a shortcut past the gate - you
+// still press Save, and the gate still reads the file like any other run.
+// Comment the rule out of the `rules:` block, which is what actually disables
+// it - raising max_quoted_chars does NOT, because the window is clamped to the
+// body length (that clamp is the fix for the short-body bug). A quick edit that
+// looked like it disabled a rule without disabling it would be worse than none.
+$('q-quote').onclick = () => {
+  const t = $('policy');
+  t.value = /^\s*body_containment:/m.test(t.value)
+    ? t.value.replace(/^([ 	]*)body_containment:([ 	]*?
+)([ 	]*max_quoted_chars:[^
+]*)/m,
+                      '$1# body_containment:$2#$3')
+    : t.value.replace(/^([ 	]*)# body_containment:([ 	]*?
+)[ 	]*#([ 	]*max_quoted_chars:[^
+]*)/m,
+                      '$1body_containment:$2$3');
+  bump();
+};
+
+$('q-parent').onclick = () => {
+  const t = $('policy');
+  t.value = /^\s*-\s*"1{32}"/m.test(t.value)
+    ? t.value.replace(/^[ 	]*-[ 	]*"1{32}"[ 	]*?
+/m, '')
+    : t.value.replace(/^([ 	]*)allowed_parents:([ 	]*?
+)/m,
+                      '$1allowed_parents:$2$1  - "11111111111111111111111111111111"
+');
+  bump();
+};
+
+$('q-reset').onclick = () => { $('policy').value = PRISTINE; bump(); };
 
 $('live').onchange = () => {
   const on = $('live').checked;

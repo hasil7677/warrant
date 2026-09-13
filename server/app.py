@@ -435,6 +435,15 @@ async def api_run(body: RunIn) -> StreamingResponse:
     """
     s = get_session(body.session)
     s.live = body.live
+
+    # Each press of Run is an independent scenario, so the idempotency ledger
+    # starts empty. Without this the second run refuses every legal action as
+    # `duplicate_action` - correct behaviour for one long-running agent, and
+    # exactly wrong for a demo you press twice. The retry-storm beat still
+    # works because it repeats WITHIN a run.
+    led = s.dir / "ledger.db"
+    if led.exists():
+        led.unlink()
     s.reset_apps()
 
     steps = scenario()
