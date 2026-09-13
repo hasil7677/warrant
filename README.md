@@ -8,7 +8,7 @@ Give an agent tools that send email and book time with other people, and you hav
 
 ## Demo
 
-**▶ Two-minute demo: _(link)_**
+**▶ [Two-minute demo](https://youtu.be/lKqEVJ_mBDs)**
 
 Or run it yourself - no credentials, no network, 70 seconds:
 
