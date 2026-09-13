@@ -7,11 +7,29 @@ Give an agent tools that send email and book time with other people, and you hav
 `warrant` sits in between. The workflow it governs is deliberately boring: an inbound meeting request gets read, scheduled, logged, and answered across Gmail, Google Calendar, and Notion. **The gate and the evidence trail are the product.**
 
 ```
+python server/app.py         # the console -> http://127.0.0.1:8000
 python demo/demo.py          # 70 seconds, no credentials, no network
 python -m pytest tests/ -q   # 127 tests
 python eval/run.py           # 20 cases -> EVAL.md + a stamped artifact
 python scripts/mutate.py     # break the gate on purpose, check the tests notice
+python scripts/smoke.py      # prove the three real APIs are reachable
 ```
+
+## The console
+
+`server/` is a local web view of the gate deciding, one proposal at a time.
+
+The point is not to look at a log. It is to make the *declarative* half of
+"declarative policy gate" tangible: **edit a rule in the left pane, save, re-run,
+and watch a verdict flip.** Delete `all` from `blocked_local_parts` and the
+company-wide cc stops being refused; put it back and it is refused again. No
+prompt changed, no redeploy, no model involved — a human edited one line and the
+agent's permissions changed. Two header toggles turn on the kill switch or delete
+the policy file, and both turn the entire run red, legal actions included.
+
+The console cannot bypass the gate. Every action goes through `Broker.execute`
+exactly as the CLI and the tests do, there is no override control, and edits land
+in a per-session sandbox rather than the repo's `policy.yaml`.
 
 ---
 
@@ -68,6 +86,7 @@ Plus the states that are not rules: `policy_missing`, `policy_unreadable`, `poli
 | **20 evaluation cases** | `eval/cases/*.yaml` → [`EVAL.md`](EVAL.md) |
 | **5/5 mutations killed** | `scripts/mutate.py` |
 | **Stamped artifacts** | `artifacts/` — git SHA, dirty flag, environment, full config |
+| **Live integration** | 8/8 against real Gmail, Calendar, Notion — each write read back independently |
 
 **The evaluation does not check status strings.** Each case runs through the real broker and gate against fake app clients, then inspects the fakes' ledgers. A refusal case fails if the ledger grew, even when the returned status was right — a gate that refuses and then acts is worse than one that does neither.
 
@@ -112,6 +131,6 @@ The model backend is Bedrock Converse, Mistral Large by default. `WARRANT_MODEL=
 
 ## What this is not
 
-- **Not a guarantee about real API behaviour.** The tests and evaluation run against fakes whose signatures are asserted to match the real clients. `scripts/smoke.py` is the separate check that the real ones work, and the two are deliberately not the same artifact.
+- **Not a guarantee about real API behaviour from the test suite alone.** The tests and evaluation run against fakes whose signatures are asserted to match the real clients. The integration is proven separately by `scripts/smoke.py` — latest run 8/8 against real Gmail, Calendar and Notion, every write read back with an independent call (`artifacts/smoke_20260913T194858Z.json`). The two are deliberately not the same artifact: one proves the gate decides correctly, the other proves the apps are real.
 - **Not an estimate of behaviour on arbitrary traffic.** The cases are hand-written against the failure modes the policy was designed for. That is a statement about those modes, not a sample.
 - **Not a model evaluation.** The eval supplies proposals directly, with no model in the loop. The gate's correctness must not depend on the model behaving well, so it is measured without one.

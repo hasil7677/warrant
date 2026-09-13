@@ -54,9 +54,32 @@ Inbound meeting request → read the thread → check the calendar → create th
 
 Every run emits a stamped artifact — git SHA, dirty flag, interpreter and library versions, full config — so a number in a document can be traced to the run that produced it instead of being transcribed by hand.
 
-### What is not measured, and why
+### The live control
 
-- **The fakes are not the real clients.** Everything above runs against stand-ins whose method signatures are asserted to match the real Gmail/Calendar/Notion clients. What that does *not* prove is that the real ones behave identically. `scripts/smoke.py` is the separate control that writes one real object per app and reads each back with an independent call — because a 200 from a create endpoint is the service's claim, not proof. The two are deliberately different artifacts; collapsing them would let a green test suite imply a working integration.
+The tests and the evaluation run against fakes. That is a deliberate choice, and on its own it would be a hole — a green suite against stand-ins can imply a working integration that does not exist. So the integration is proven separately, by `scripts/smoke.py`, which writes one real object per app and then **reads each one back with an independent call**, because a 200 from a create endpoint is the service's claim and not proof.
+
+Latest run — `artifacts/smoke_20260913T194858Z.json`, git `297782c`:
+
+```
+PASS  google oauth + gmail profile      dtomsahil@gmail.com
+PASS  gmail.list_unread                 3 unread thread(s)
+PASS  gmail.read_thread (trust anchor)  2 participants, 5669 body chars
+PASS  gmail.send -> self                message id 1a09c50cbb721fd8
+PASS  calendar.create_event             event id j9anerthokc1uch5umd8fj2dtg
+PASS  calendar read-back verify         event read back independently
+PASS  notion.create_page                page 3dacd088-d5e2-81d5-94d5-f4688ca82463
+PASS  notion read-back verify           page read back independently
+
+8 passed, 0 failed · apps proven live: gmail, calendar, notion
+```
+
+The two artifacts are deliberately kept apart: the suite proves the gate decides correctly, the smoke run proves the apps are real. Neither is asked to stand in for the other.
+
+### What is still not measured, and why
+
+- **The smoke run does not go through the gate.** It is the control, not a demonstration — if the gate later refuses something, the smoke artifact is the evidence that the refusal is the gate working rather than the credentials being broken. A run that proved both at once would prove neither.
+- **One live run is one data point.** It shows the clients work against these three accounts, at that commit. It is not a statement about rate limits, pagination, quota behaviour, or a second workspace.
+- **The `dirty: true` flag on that artifact is real.** The tree had uncommitted changes when the run happened. The artifact records it rather than hiding it, which is the entire reason the field exists.
 - **Cases are hand-written, not sampled.** They cover the failure modes the policy was designed against. That is a statement about those modes, not an estimate of behaviour on arbitrary real traffic.
 - **The model is not in the evaluation loop.** Proposals are supplied directly. The gate's correctness must not depend on the model behaving well, so it is measured without one. The agent is exercised separately.
 - **Sample size is small.** 20 cases and 5 mutations is a smoke-scale statement, not a powered benchmark. Read it as "these specific failures are held shut," not "the gate is safe."
@@ -74,6 +97,6 @@ A third was caught in the tooling itself: the first mutation-check parser report
 
 ### Known gaps
 
-- OAuth consent for Gmail/Calendar is interactive, so the live smoke path requires a human once. Until then the evidence above is fake-backed, and this document says so rather than implying otherwise.
+- OAuth consent for Gmail/Calendar is interactive, so the live path requires a human once per machine. That is a property of the grant being user-scoped rather than a workspace-wide service account, and it is the trade accepted on purpose.
 - `notion.create_page` handles a plain-page parent on the first call and retries as a database parent only on a 400 that names one. The database path is the least-exercised code in the repo.
 - The per-day caps are enforced from a local SQLite ledger. A second process with its own ledger would not see the first one's count. Single-operator assumption, stated rather than hidden.
