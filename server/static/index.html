@@ -80,7 +80,10 @@
         border-top:1px solid var(--line)}
   .mode{font:11px/1 var(--mono);padding:5px 9px;border-radius:999px;
         border:1px solid var(--line);color:var(--amber)}
-  .mode.live{color:var(--mint);border-color:var(--mint)}
+  .mode.live{color:var(--red);border-color:var(--red);background:#2a1414}
+  .err{background:#2a1414;border:1px solid var(--red);color:#f6a9a3;border-radius:9px;
+       padding:12px 14px;font-size:12.5px;margin-bottom:10px}
+  .eid a{color:var(--mint)}
 </style>
 </head>
 <body>
@@ -88,7 +91,7 @@
   <h1>warrant</h1>
   <span class="tag">the agent proposes · the policy authorizes</span>
   <span class="spacer"></span>
-  <span id="mode" class="mode">apps: fakes</span>
+  <label class="chk" title="Act on your real Gmail, Calendar and Notion"><input type="checkbox" id="live"> <span id="mode" class="mode">apps: fakes</span></label>
   <label class="chk"><input type="checkbox" id="ks"> kill switch</label>
   <label class="chk"><input type="checkbox" id="nopol"> no policy file</label>
   <button id="save">Save policy</button>
@@ -164,17 +167,40 @@ $('save').onclick = async () => {
   setTimeout(()=>{ $('save').textContent='Save policy'; $('save').disabled=false; }, 1100);
 };
 
+$('live').onchange = () => {
+  const on = $('live').checked;
+  $('mode').textContent = on ? 'apps: LIVE — real sends' : 'apps: fakes';
+  $('mode').classList.toggle('live', on);
+};
+
 $('run').onclick = async () => {
+  const live = $('live').checked;
+  if (live && !confirm(
+      'LIVE MODE
+
+This performs REAL actions on your Gmail, Calendar and Notion.
+' +
+      'The scenario only targets a thread whose sole participant is you, so it ' +
+      'cannot reach anyone else.
+
+Continue?')) return;
   $('run').disabled = true;
   $('feed').innerHTML = '';
   setLedgers({gmail:0, calendar:0, notion:0});
 
   const res = await fetch('/api/run', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({session: SID, live:false,
+    body: JSON.stringify({session: SID, live,
                           kill_switch: $('ks').checked,
                           delete_policy: $('nopol').checked})
   });
+
+  if (!res.ok){
+    let msg = 'Request failed.';
+    try { msg = (await res.json()).detail || msg; } catch {}
+    $('feed').innerHTML = `<div class="err">${esc(msg)}</div>`;
+    $('run').disabled = false; return;
+  }
 
   // Parse the SSE stream by hand: fetch() gives a byte stream, and events can
   // split across chunks, so hold a buffer and only consume complete frames.
@@ -212,7 +238,9 @@ function render(d){
     <p class="intent">${esc(d.intent)}</p>
     ${rules ? `<div class="rules">${rules}</div>` : ''}
     ${reason && !d.allowed ? `<div class="reason">${esc(reason)}</div>` : ''}
-    ${d.external_id ? `<div class="eid">→ ${esc(d.external_id)}</div>` : ''}`;
+    ${d.external_id ? `<div class="eid">→ ${esc(d.external_id)}${
+        d.live ? ' <span style="color:var(--dim)">· real object, verifiable in the app</span>' : ''
+      }</div>` : ''}`;
   $('feed').appendChild(el);
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
 }
