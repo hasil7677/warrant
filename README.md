@@ -6,6 +6,28 @@ Give an agent tools that send email and book time with other people, and you hav
 
 `warrant` sits in between. The workflow it governs is deliberately boring: an inbound meeting request gets read, scheduled, logged, and answered across Gmail, Google Calendar, and Notion. **The gate and the evidence trail are the product.**
 
+## Demo
+
+**▶ Two-minute demo: _(link)_**
+
+Or run it yourself — no credentials, no network, 70 seconds:
+
+```
+python demo/demo.py
+```
+
+## External apps
+
+Three, all reached only through the broker, all proven live (8/8, every write read back with an independent call — `artifacts/smoke_20260913T194858Z.json`):
+
+| App | Used for | Scopes / auth |
+|---|---|---|
+| **Gmail** | read the thread (the trust anchor), send the reply | OAuth user consent — `gmail.readonly` + `gmail.send`, deliberately not `gmail.modify` |
+| **Google Calendar** | check conflicts, create the event | OAuth user consent — `calendar.events` |
+| **Notion** | log the meeting to an allowlisted page | Internal integration token, REST (no SDK) |
+
+The model backend is **Mistral Large via AWS Bedrock** (Converse API); `WARRANT_MODEL` switches families.
+
 ```
 python server/app.py         # the console -> http://127.0.0.1:8000
 python demo/demo.py          # 70 seconds, no credentials, no network
@@ -78,7 +100,9 @@ Plus the states that are not rules: `policy_missing`, `policy_unreadable`, `poli
 
 ---
 
-## Evidence
+## How reliability was tested
+
+Four independent checks, each answering a question the others cannot.
 
 | | |
 |---|---|
