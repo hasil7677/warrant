@@ -43,6 +43,41 @@ SCOPES = [
 CLIENT_SECRET_FILE = Path(os.getenv("WARRANT_CLIENT_SECRET", "client_secret.json"))
 TOKEN_FILE = Path(os.getenv("WARRANT_TOKEN_FILE", "token.json"))
 
+ENV_FILE = Path(os.getenv("WARRANT_ENV_FILE", ".env"))
+
+
+def load_env(path: Path | None = None) -> dict[str, str]:
+    """Read KEY=value lines from .env into the process environment.
+
+    Hand-rolled rather than taking a dependency on python-dotenv: this is ten
+    lines, and one fewer thing to install on a machine that is about to record
+    a demo. Values already present in the real environment WIN - a shell
+    export is a more deliberate act than a file someone edited last week, and
+    silently overriding it is how you debug the wrong credential for an hour.
+
+    Secrets live here and nowhere else. `.env` is gitignored; if you are
+    reading this in a clone, the file is absent by design.
+    """
+    path = Path(path or ENV_FILE)
+    loaded: dict[str, str] = {}
+    if not path.exists():
+        return loaded
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        loaded[key] = value
+        os.environ.setdefault(key, value)
+    return loaded
+
+
+# Load once on import so every entry point - auth, smoke, demo, the agent -
+# sees the same credentials without each one remembering to ask.
+load_env()
+
 
 class AuthError(RuntimeError):
     """Credentials are missing or unusable. The message says what to fix.

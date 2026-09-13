@@ -29,9 +29,11 @@ talks to the broker, and the broker talks to the apps.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 from warrant.broker import Broker
+from warrant.llm import build_backend
 from warrant.contract import (
     ACTION_PARAMS,
     CALENDAR_CREATE_EVENT,
@@ -40,7 +42,8 @@ from warrant.contract import (
     Proposal,
 )
 
-MODEL = "claude-opus-5"
+
+
 
 SYSTEM = """You are a scheduling assistant for an inbound meeting request.
 
@@ -160,12 +163,11 @@ class Agent:
     """Runs the model, routes its proposals to the broker, and records the trace."""
 
     def __init__(self, broker: Broker, thread_id: str, notion_parent: str = "",
-                 model: str = MODEL, effort: str = "medium") -> None:
+                 backend: Any = None) -> None:
         self.broker = broker
         self.thread_id = thread_id
         self.notion_parent = notion_parent
-        self.model = model
-        self.effort = effort
+        self.backend = backend
         self.trace: list[dict[str, Any]] = []
 
     # ── tool dispatch ───────────────────────────────────────────────────
@@ -204,58 +206,28 @@ class Agent:
 
     def run(self, task: str, max_turns: int = 12) -> dict[str, Any]:
         """Drive the model until it stops calling tools or the turn cap is hit."""
-        import anthropic
-
-        client = anthropic.Anthropic()
-        messages: list[dict[str, Any]] = [{
-            "role": "user",
-            "content": (
-                f"{task}\n\nThread id: {self.thread_id}\n"
-                f"Notion parent id: {self.notion_parent or '(none provided)'}"
-            ),
-        }]
+        backend = self.backend or build_backend()
+        messages: list[dict[str, Any]] = [backend.user_turn(
+            f"{task}\n\nThread id: {self.thread_id}\n"
+            f"Notion parent id: {self.notion_parent or '(none provided)'}"
+        )]
 
         final_text = ""
         for _ in range(max_turns):
-            response = client.messages.create(
-                model=self.model,
-                max_tokens=8000,
-                system=SYSTEM,
-                tools=TOOLS,
-                output_config={"effort": self.effort},
-                messages=messages,
-            )
+            turn = backend.send(SYSTEM, messages, TOOLS)
 
-            # A refusal is a content outcome, not an exception - check it before
-            # touching response.content, which may be empty.
-            if response.stop_reason == "refusal":
-                return {
-                    "status": "MODEL_REFUSED",
-                    "detail": getattr(response.stop_details, "explanation", None),
-                    "trace": self.trace,
-                }
+            if turn.text:
+                final_text = turn.text
+            messages.append(backend.assistant_turn(turn))
 
-            messages.append({"role": "assistant", "content": response.content})
-            text = "".join(b.text for b in response.content if b.type == "text")
-            if text:
-                final_text = text
-
-            if response.stop_reason != "tool_use":
+            if not turn.tool_calls:
                 break
 
-            results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                out = self._handle(block.name, dict(block.input))
-                results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(out, default=str),
-                })
-            # All results go back in ONE user message - splitting them teaches
-            # the model to stop making parallel calls.
-            messages.append({"role": "user", "content": results})
+            pairs = []
+            for call in turn.tool_calls:
+                out = self._handle(call.name, dict(call.input))
+                pairs.append((call.id, out))
+            messages.append(backend.tool_results(pairs))
 
         executed = [t for t in self.trace if t["result"]["status"] == "EXECUTED"]
         refused = [t for t in self.trace if t["result"]["status"] != "EXECUTED"]
