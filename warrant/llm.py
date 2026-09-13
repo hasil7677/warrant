@@ -141,7 +141,15 @@ def build_backend() -> BedrockConverse:
             "\nThe demo, the 127 tests and the evaluation need none of this - they\n"
             "exercise the gate, and there is no model inside the gate."
         )
-    model = (os.getenv("WARRANT_MODEL") or DEFAULT_MISTRAL).strip()
+    # BEDROCK_MODEL_ID is accepted as an alias because it is the name people
+    # already have in their AWS notes and .env files. Silently ignoring a
+    # variable the operator clearly set, and then running a different model
+    # than they asked for, is a worse outcome than either name being wrong.
+    model = (
+        os.getenv("WARRANT_MODEL")
+        or os.getenv("BEDROCK_MODEL_ID")
+        or DEFAULT_MISTRAL
+    ).strip()
     return BedrockConverse(model_id=model, region=region)
 
 

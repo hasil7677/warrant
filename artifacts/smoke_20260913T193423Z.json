@@ -1,0 +1,45 @@
+{
+  "kind": "smoke",
+  "created_utc": "2026-09-13T19:34:23+00:00",
+  "git": {
+    "sha": "d947f3a0314fac72f547413a88f965bab1694e61",
+    "dirty": false,
+    "dirty_files": []
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "packages": {
+      "anthropic": "1.5.0",
+      "googleapiclient": null,
+      "yaml": "6.0.3"
+    }
+  },
+  "config": {
+    "skipped": {
+      "notion": false,
+      "google": true
+    }
+  },
+  "result": {
+    "steps": [
+      {
+        "step": "google",
+        "status": "SKIP",
+        "detail": "--skip-google"
+      },
+      {
+        "step": "notion.create_page",
+        "status": "FAIL",
+        "detail": "RuntimeError: WARRANT_SMOKE_PARENT is not set. Copy the target Notion page's URL - the 32-hex id at the end is the parent id. Share that page with your integration first (... -> Connections)."
+      }
+    ],
+    "passed": 0,
+    "failed": 1,
+    "apps_live": {
+      "gmail": false,
+      "calendar": false,
+      "notion": false
+    }
+  }
+}
