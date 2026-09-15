@@ -1,0 +1,44 @@
+# incident_response.yaml
+# ────────────────────────
+# Page on-call, post a status update naming the incident that was actually
+# opened, then file a follow-up ticket. Three apps (Twilio, Slack, Linear),
+# and the second and third steps both reference the first step's result via
+# ${steps.page.external_id} - proving the id in the Slack message and the
+# Linear ticket is the one Twilio actually returned, not one the workflow
+# author guessed at write time.
+#
+# The Linear step is on_refused: continue - paging on-call and telling people
+# is the part of this workflow that matters operationally; filing the
+# follow-up ticket is a convenience that should not block the rest of the run
+# if, say, nobody has allowlisted a Linear team yet.
+
+name: incident-response
+description: >
+  Page on-call, announce it, file a tracking ticket. The ticket step is
+  allowed to fail without stopping the run; paging and announcing are not.
+on_step_refused: halt
+
+steps:
+  - id: page
+    tool: twilio.send_sms
+    params:
+      to: ["+15550001111"]
+      from_number: "+15550009999"
+      body: "API error rate above threshold - paging on-call."
+    rationale: page the current on-call engineer
+
+  - id: notify
+    tool: slack.post_message
+    params:
+      channel: "C0WARRANTALERTS"
+      text: "Incident opened (Twilio message ${steps.page.external_id}). Investigating."
+    rationale: keep the team informed in real time
+
+  - id: ticket
+    tool: linear.create_issue
+    on_refused: continue
+    params:
+      team_id: "team_warrant"
+      title: "Follow up: incident ${steps.page.external_id}"
+      description: "Auto-filed from incident_response.yaml. Fill in the postmortem once resolved."
+    rationale: track the follow-up work

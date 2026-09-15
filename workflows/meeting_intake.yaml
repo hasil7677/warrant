@@ -1,0 +1,52 @@
+# meeting_intake.yaml
+# ────────────────────
+# The scenario this project shipped with: an inbound meeting request gets
+# replied to, booked, and logged. Three apps, three steps, expressed as a
+# workflow instead of three separate calls - the same proposals demo.py and
+# the console already make, run through the same gate, in sequence.
+#
+# Note for anyone running this via `python -m warrant.workflow --` against
+# fakes rather than through a test: the bare CLI's fake Gmail client has no
+# thread seeded, so step "reply" will be refused (recipient_scope: no facts
+# to check recipients against) and the run halts there by design - a
+# workflow gets no more benefit of the doubt than a lone proposal does.
+# `tests/test_workflow.py::test_meeting_intake_runs_end_to_end` seeds a
+# thread and shows the same three steps completing.
+
+name: meeting-intake
+description: >
+  Reply to the requester, book the slot, and file a short note - the
+  original three-app scheduling scenario, as a workflow.
+on_step_refused: halt
+
+steps:
+  - id: reply
+    tool: gmail.send
+    thread_id: t-inbound-1
+    params:
+      to: ["recruiter@brightlane.io"]
+      subject: "Re: Intro call this week?"
+      body: "Thursday 10am works for me - sending an invite now."
+    rationale: confirm the agreed slot
+
+  - id: book
+    tool: calendar.create_event
+    thread_id: t-inbound-1
+    params:
+      summary: "Intro call - Sahil / recruiter"
+      start_iso: "2026-09-17T10:00:00+00:00"
+      end_iso: "2026-09-17T10:30:00+00:00"
+      attendees: ["recruiter@brightlane.io"]
+      description: "30 minute intro call."
+    rationale: book the agreed slot
+
+  - id: log
+    tool: notion.create_page
+    params:
+      parent_id: "11111111111111111111111111111111"
+      title: "Intro call - recruiter"
+      # References the calendar step's own id, so the note records the real
+      # event id an independent reader could look up - not a string the
+      # model typed from memory.
+      body_md: "Booked Thursday 10:00 UTC. Calendar event: ${steps.book.external_id}"
+    rationale: log the meeting

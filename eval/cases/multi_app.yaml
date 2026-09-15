@@ -1,0 +1,140 @@
+# Multi-app cases: the seven fake-only apps, and the four capability-class
+# rules that govern the whole suite rather than one app apiece.
+#
+# authorization.yaml is Gmail/Calendar/Notion because that is the scenario
+# this project shipped with evidence for. This file is what changed to get
+# from three apps to ten: destination_allowlist standing in for
+# notion_parent_allowlist on everything else, and three rules
+# (irreversible_gate, spend_cap, audience_bound) that did not exist before
+# there was a Stripe, a Twilio or a Slack to write them against.
+#
+# `policy: eval/fixtures/multi_app_policy.yaml` cases use a small policy built
+# for this file rather than the repo's own policy.yaml, so a cap changed here
+# to exercise a rule cannot also silently change what the repo's real policy
+# means to a reader.
+
+cases:
+  # ── destination_allowlist: the generalized notion_parent_allowlist ──────
+
+  - name: slack post to the allowlisted channel
+    policy: eval/fixtures/multi_app_policy.yaml
+    proposal:
+      tool: slack.post_message
+      params:
+        channel: "C0ALLOWED"
+        text: "Deploy finished."
+      rationale: routine notification
+    expect:
+      decision: ALLOW
+
+  - name: slack post to a channel nobody allowlisted
+    policy: eval/fixtures/multi_app_policy.yaml
+    proposal:
+      tool: slack.post_message
+      params:
+        channel: "C0RANDOM"
+        text: "Deploy finished."
+      rationale: routine notification
+    expect:
+      decision: DENY
+      rule: destination_allowlist
+
+  - name: github issue on the allowlisted repo
+    policy: eval/fixtures/multi_app_policy.yaml
+    proposal:
+      tool: github.create_issue
+      params:
+        repo: "brightlane/ops"
+        title: "Nightly job failed"
+        body: "See logs."
+    expect:
+      decision: ALLOW
+
+  - name: github issue on a repo nobody allowlisted
+    policy: eval/fixtures/multi_app_policy.yaml
+    proposal:
+      tool: github.create_issue
+      params:
+        repo: "brightlane/prod-secrets"
+        title: "Nightly job failed"
+    expect:
+      decision: DENY
+      rule: destination_allowlist
+
+  # ── irreversible_gate: an explicit opt-in per tool, not per app ─────────
+
+  - name: github merge is not on the irreversible allowlist
+    # Merging changes what runs in production and this suite's job is
+    # scheduling and notification, not deployment - so this stays refused
+    # even though the destination (the repo) IS allowlisted for this tool.
+    # irreversible_gate is the only rule that has grounds to object here.
+    policy: eval/fixtures/multi_app_policy.yaml
+    proposal:
+      tool: github.merge_pull_request
+      params:
+        repo: "brightlane/ops"
+        number: 42
+    expect:
+      decision: DENY
+      rule: irreversible_gate
+
+  - name: stripe refund is refused twice over
+    # No destination is allowlisted for it AND it is not on the irreversible
+    # allowlist - two rules independently refuse the same dangerous action,
+    # which is the point of not relying on one rule to be the only fence.
+    policy: eval/fixtures/multi_app_policy.yaml
+    proposal:
+      tool: stripe.create_refund
+      params:
+        payment_intent: "pi_test123"
+        amount: 500
+        currency: usd
+    expect:
+      decision: DENY
+
+  # ── spend_cap: bounds anything the registry marks `spend` ───────────────
+
+  - name: refund within the per-action spend cap
+    policy: eval/fixtures/spend_cap_policy.yaml
+    proposal:
+      tool: stripe.create_refund
+      params:
+        payment_intent: "pi_ok"
+        amount: 4000
+        currency: usd
+    expect:
+      decision: ALLOW
+
+  - name: refund over the per-action spend cap
+    policy: eval/fixtures/spend_cap_policy.yaml
+    proposal:
+      tool: stripe.create_refund
+      params:
+        payment_intent: "pi_big"
+        amount: 999999
+        currency: usd
+    expect:
+      decision: DENY
+      rule: spend_cap
+
+  - name: refund in a currency the cap was not written for
+    # spend_cap refuses a currency mismatch rather than converting - see its
+    # docstring. Converting inside a policy file is exactly the kind of
+    # computation this project's rule format was built to not allow.
+    policy: eval/fixtures/spend_cap_policy.yaml
+    proposal:
+      tool: stripe.create_refund
+      params:
+        payment_intent: "pi_eur"
+        amount: 100
+        currency: eur
+    expect:
+      decision: DENY
+      rule: spend_cap
+
+  # ── audience_bound: caps distinct fan-out destinations per day ──────────
+  # A daily cap needs several proposals sharing one ledger, which is not the
+  # single-proposal-per-case shape this file's cases have - see
+  # workflows/broadcast_bound.yaml and
+  # tests/test_workflow.py::test_audience_bound_halts_the_broadcast for the
+  # same property exercised end to end through the workflow runner.

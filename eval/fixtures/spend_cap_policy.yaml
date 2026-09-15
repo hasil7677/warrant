@@ -1,0 +1,21 @@
+# A small policy for eval/cases/multi_app.yaml's spend_cap cases. Notion,
+# destination_allowlist etc are all absent on purpose - this fixture exists to
+# exercise exactly one rule, not to be a plausible whole-suite policy.
+
+version: 1
+
+rules:
+  destination_allowlist:
+    allowed:
+      stripe.create_refund: ["pi_ok", "pi_big", "pi_eur"]
+
+  irreversible_gate:
+    allowed_tools:
+      - stripe.create_refund
+
+  spend_cap:
+    currency: usd
+    max_per_action_minor:
+      stripe.create_refund: 5000    # $50.00
+    max_per_day_minor:
+      stripe.create_refund: 20000   # $200.00

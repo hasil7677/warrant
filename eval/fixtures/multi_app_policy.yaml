@@ -1,0 +1,16 @@
+# A small policy for eval/cases/multi_app.yaml. Not the repo's real
+# policy.yaml - a minimal fixture, so a change here to exercise one rule
+# cannot quietly change what the shipped policy means to someone reading it.
+
+version: 1
+
+rules:
+  destination_allowlist:
+    allowed:
+      slack.post_message: ["C0ALLOWED"]
+      github.create_issue: ["brightlane/ops"]
+      github.merge_pull_request: ["brightlane/ops"]
+
+  irreversible_gate:
+    allowed_tools:
+      - slack.post_message

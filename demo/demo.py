@@ -366,7 +366,7 @@ def run(s: Screen) -> int:
                f"written{RESET}")
         s.line(f"  {WHITE}down that it was allowed.{RESET}", 1.8)
         s.line()
-        s.line(f"  {GREY}127 tests. 20 evaluation cases. 5 of 5 mutations killed - the{RESET}")
+        s.line(f"  {GREY}261 tests. 29 evaluation cases. 10 of 10 mutations killed - the{RESET}")
         s.line(f"  {GREY}suite fails when the gate is broken on purpose.{RESET}", 2.6)
         s.line()
         return 0 if total == 1 else 1

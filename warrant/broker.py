@@ -4,8 +4,8 @@ broker.py
 The credential boundary, enforced.
 
 This is the only module that imports `warrant.apps.*`, and `warrant.auth` is
-the only place a token is read. `tests/test_import_boundary.py` fails if any
-other module reaches an app client - the rule is checked, not documented.
+the only place a token is read. `tests/test_structure.py` fails if any other
+module reaches an app client - the rule is checked, not documented.
 
 The shape of `execute()` is the whole argument:
 
@@ -25,18 +25,45 @@ Three properties are load-bearing, and each one is a test:
   3. **Every decision is journaled, allowed or refused, before anything is
      executed.** A refusal that isn't written down is indistinguishable from
      a call that never happened.
+  4. **A retry never gets a second real attempt while the first one's
+     outcome is unknown.** `execute()` writes a `'pending'` ledger row
+     *before* calling `_perform`, not after it returns - so if the app call
+     raises (a timeout, a dropped connection), there is no way to tell
+     whether the write landed server-side before the response was lost. The
+     honest answer is not "assume it failed and retry" - that duplicates a
+     write that actually went through - so the identical proposal is refused
+     until the ambiguity is resolved by a human, rather than either guess
+     being made for them. See `warrant/ledger.py`'s "status" section.
 
 Clients are injectable so tests and the demo can run against `warrant.fakes`
 without credentials. That injection is not a bypass: the fakes replace the
 *apps*, never the gate.
+
+## Dispatch, generalized
+
+`_perform` used to be three `if proposal.tool == X:` blocks, one per app, each
+naming its client's keyword arguments by hand. That does not scale to
+thirteen apps, so dispatch now reads `warrant.registry`: every tool declares
+which app it belongs to (`ToolSpec.app`) and which method performs it
+(`ToolSpec.function`), and `_perform` resolves both and splats the proposal's
+params at the result. A new adapter needs a `ToolSpec` and a client with a
+matching method - nothing in this file changes.
+
+One case stays hand-written: `gmail.send`'s `in_reply_to` defaults to the
+thread the broker read when the model did not supply one, which keeps the
+reply actually threaded in Gmail. That is domain behaviour specific to one
+app, not a dispatch mechanism, so it stays as one explicit line rather than
+becoming a registry field every other tool would carry uselessly.
 """
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, Optional
 
 from warrant import journal as journal_mod
 from warrant import policy as policy_mod
+from warrant import registry as registry_mod
 from warrant.contract import (
     CALENDAR_CREATE_EVENT,
     GMAIL_SEND,
@@ -59,13 +86,20 @@ class Broker:
         gmail: Any = None,
         calendar: Any = None,
         notion: Any = None,
+        apps: Optional[dict[str, Any]] = None,
         ledger: Optional[Ledger] = None,
     ) -> None:
         """Real clients by default; pass fakes to run without credentials.
 
-        The real modules are imported lazily so that constructing a Broker with
-        fakes never triggers an auth check - which is what lets the whole test
-        suite and the demo run offline.
+        `gmail`, `calendar` and `notion` stay named parameters - they are the
+        three apps with live credentials and a smoke artifact behind them, and
+        every existing caller (the console, `eval/run.py`, the demo, this
+        module's own tests) already constructs a Broker this way. `apps` is
+        the general path for the other ten: a dict of app name -> client,
+        e.g. `apps={"slack": FakeSlack(), "stripe": FakeStripe()}`. An app
+        named in neither place resolves lazily to its real module on first
+        use, the same way gmail/calendar/notion always have - constructing a
+        Broker never triggers an auth check on its own.
         """
         if gmail is None or calendar is None or notion is None:
             from warrant.apps import gcal as _gcal
@@ -76,10 +110,40 @@ class Broker:
             calendar = calendar or _gcal
             notion = notion or _notion
 
-        self._gmail = gmail
-        self._calendar = calendar
-        self._notion = notion
+        self._clients: dict[str, Any] = dict(apps or {})
+        self._clients["gmail"] = gmail
+        self._clients["calendar"] = calendar
+        self._clients["notion"] = notion
         self.ledger = ledger if ledger is not None else Ledger()
+
+    def _client(self, app_name: str) -> Any:
+        """The client for one app, resolving to the real adapter on first use.
+
+        `importlib.import_module` rather than a static `from warrant.apps
+        import x` for the ten apps that are not gmail/calendar/notion: this
+        keeps the credential-boundary test's accounting simple (it walks
+        `ast.Import`/`ast.ImportFrom` nodes) without changing what the test
+        actually guarantees - this remains the only module in the package that
+        can reach an app client, static import or dynamic.
+        """
+        if app_name not in self._clients:
+            spec = registry_mod.app_spec(app_name)
+            if spec is None:
+                raise ValueError(f"no such app {app_name!r}")
+            self._clients[app_name] = importlib.import_module(f"warrant.apps.{spec.module}")
+        return self._clients[app_name]
+
+    @property
+    def _gmail(self) -> Any:
+        return self._client("gmail")
+
+    @property
+    def _calendar(self) -> Any:
+        return self._client("calendar")
+
+    @property
+    def _notion(self) -> Any:
+        return self._client("notion")
 
     # ── the trust anchor ────────────────────────────────────────────────
 
@@ -108,6 +172,37 @@ class Broker:
         Note the parameter list: one Proposal. Nothing a caller can set here
         changes the verdict.
         """
+        idem_key = policy_mod.idempotency_key(proposal)
+
+        # A prior attempt at this exact fingerprint whose outcome is unknown -
+        # `_perform` may have raised because the app never got the call, or
+        # because it got it, did it, and the response was what was lost. This
+        # gate cannot tell those apart, so it refuses the retry rather than
+        # guess: a second `_perform` here could be a genuine retry of a
+        # no-op, or it could be a duplicate email that already left. Runs
+        # before the policy check and before facts are even read - an
+        # unresolved attempt is refused regardless of what the gate would
+        # otherwise say. See warrant/ledger.py's "status" section.
+        if self.ledger.pending_attempt(idem_key):
+            verdict = Verdict(
+                False,
+                [
+                    f"A previous attempt at this exact {proposal.tool} action has an unknown "
+                    "outcome - the call may have failed before reaching the app, or it may "
+                    "have reached the app and the response was lost. Retrying the identical "
+                    "proposal could duplicate a real effect, so it is refused until the prior "
+                    "attempt is reconciled."
+                ],
+                ["ambiguous_external_state"],
+            )
+            row_id = journal_mod.log_decision(proposal, verdict)
+            return {
+                "status": STATUS_REJECTED,
+                "reasons": verdict.reasons,
+                "rule_ids": verdict.rule_ids,
+                "journal_id": row_id,
+            }
+
         facts = self.facts_for(proposal.thread_id)
         verdict: Verdict = policy_mod.check(proposal, facts, self.ledger)
 
@@ -120,21 +215,31 @@ class Broker:
                 "journal_id": row_id,
             }
 
+        # Written BEFORE the call, not after - so a row marking this attempt
+        # exists for the entire duration of `_perform`, including the window
+        # where a client-side failure could follow a server-side success.
+        pending_row_id = self.ledger.mark_pending(
+            tool=proposal.tool, thread_id=proposal.thread_id, idem_key=idem_key
+        )
+
         try:
             external_id = self._perform(proposal)
         except Exception as exc:
             row_id = journal_mod.log_decision(proposal, verdict, error=f"{type(exc).__name__}: {exc}")
+            # The ledger row stays 'pending' - deliberately not resolved
+            # either way here, because we do not know which way is true.
+            # `pending_attempt()` is what makes the next identical proposal
+            # refuse instead of reaching `_perform` a second time.
             return {
                 "status": STATUS_ERROR,
                 "error": f"{type(exc).__name__}: {exc}",
                 "journal_id": row_id,
             }
 
-        self.ledger.record(
-            tool=proposal.tool,
-            thread_id=proposal.thread_id,
-            idem_key=policy_mod.idempotency_key(proposal),
+        self.ledger.resolve_success(
+            pending_row_id,
             external_id=external_id,
+            **self._effect_fields(proposal),
         )
         row_id = journal_mod.log_decision(proposal, verdict, external_id=external_id)
         return {
@@ -144,6 +249,47 @@ class Broker:
             "journal_id": row_id,
         }
 
+    def _effect_fields(self, proposal: Proposal) -> dict[str, Any]:
+        """The ledger columns `spend_cap` and `audience_bound` read back later.
+
+        Computed from the registry the same way the rules that will read them
+        compute it, so the two sides can never quietly drift - a spend amount
+        recorded one way and priced another would make the cap meaningless
+        without either check ever failing.
+        """
+        spec = registry_mod.tool_spec(proposal.tool)
+        if spec is None:
+            return {}
+        params = proposal.params if isinstance(proposal.params, dict) else {}
+        out: dict[str, Any] = {}
+
+        if registry_mod.SPEND in spec.classes:
+            if spec.amount_param:
+                try:
+                    out["amount_minor"] = int(params.get(spec.amount_param))
+                except (TypeError, ValueError):
+                    out["amount_minor"] = None
+                out["currency"] = (
+                    str(params.get(spec.currency_param) or spec.flat_cost_currency).lower()
+                    if spec.currency_param
+                    else spec.flat_cost_currency
+                )
+            elif spec.flat_cost_minor:
+                count = 1
+                if spec.recipient_params:
+                    value = params.get(spec.recipient_params[0])
+                    count = max(1, len(value) if isinstance(value, (list, tuple, set)) else 1)
+                out["amount_minor"] = int(spec.flat_cost_minor) * count
+                out["currency"] = spec.flat_cost_currency
+
+        if registry_mod.AUDIENCE in spec.classes:
+            field = spec.audience_param or (spec.recipient_params[0] if spec.recipient_params else None)
+            if field:
+                value = params.get(field)
+                out["audience_key"] = " ".join(str(value).split()).lower() if value is not None else None
+
+        return out
+
     # ── dispatch ────────────────────────────────────────────────────────
 
     def _perform(self, proposal: Proposal) -> str:
@@ -151,40 +297,27 @@ class Broker:
 
         Params are splatted by name, which is safe precisely because the gate
         has already rejected any key outside `ACTION_PARAMS` for this tool -
-        an unknown key can never arrive here as a surprise kwarg.
+        an unknown key can never arrive here as a surprise kwarg. The tool ->
+        (app, function) mapping comes from `warrant.registry`; adding an app
+        does not touch this method.
         """
-        p = dict(proposal.params)
+        spec = registry_mod.tool_spec(proposal.tool)
+        if spec is None:
+            # Unreachable in practice: the gate rejects an unknown tool before
+            # execute() ever calls this. Raised rather than returning quietly,
+            # so a future tool added to the registry with a typo'd function
+            # name fails loudly instead of doing nothing.
+            raise ValueError(f"no dispatch for authorized tool {proposal.tool!r}")
 
-        if proposal.tool == GMAIL_SEND:
-            return self._gmail.send(
-                to=p.get("to", []),
-                subject=p.get("subject", ""),
-                body=p.get("body", ""),
-                cc=p.get("cc"),
-                bcc=p.get("bcc"),
-                in_reply_to=p.get("in_reply_to") or proposal.thread_id,
-            )
+        client = self._client(spec.app)
+        fn = getattr(client, spec.function)
+        kwargs = dict(proposal.params) if isinstance(proposal.params, dict) else {}
 
-        if proposal.tool == CALENDAR_CREATE_EVENT:
-            return self._calendar.create_event(
-                summary=p.get("summary", ""),
-                start_iso=p["start_iso"],
-                end_iso=p["end_iso"],
-                attendees=p.get("attendees") or [],
-                description=p.get("description", ""),
-            )
+        if proposal.tool == GMAIL_SEND and not kwargs.get("in_reply_to"):
+            kwargs["in_reply_to"] = proposal.thread_id
 
-        if proposal.tool == NOTION_CREATE_PAGE:
-            return self._notion.create_page(
-                parent_id=p["parent_id"],
-                title=p.get("title", ""),
-                body_md=p.get("body_md", ""),
-            )
-
-        # Unreachable: the gate rejects unknown tools. Raised rather than
-        # silently returning, so a future tool added without a policy rule
-        # fails loudly instead of quietly doing nothing.
-        raise ValueError(f"no dispatch for authorized tool {proposal.tool!r}")
+        result = fn(**kwargs)
+        return str(result)
 
     # ── independent verification ────────────────────────────────────────
 
@@ -194,6 +327,10 @@ class Broker:
         The id returned by a create endpoint is the service's claim that it
         did something. This goes back and looks. Borrowed from the same
         principle as an end-to-end check that refuses to trust a self-report.
+
+        Only the three proven-live apps have a read-back path wired here -
+        the point of `verify()` is to re-check a *live* claim independently,
+        and the ten fake-only apps have never made a live claim to check.
         """
         try:
             if tool == NOTION_CREATE_PAGE:
@@ -210,4 +347,4 @@ class Broker:
                 return {"verified": None, "detail": "no read-back for send in this build"}
         except Exception as exc:
             return {"verified": False, "detail": f"{type(exc).__name__}: {exc}"}
-        return {"verified": None, "detail": "unknown tool"}
+        return {"verified": None, "detail": "no read-back wired for this tool"}

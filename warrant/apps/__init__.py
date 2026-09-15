@@ -1,7 +1,12 @@
 """
 warrant.apps
 ────────────
-The three real clients: Gmail, Google Calendar, Notion.
+Ten real clients: Gmail, Google Calendar, Notion - the three with live
+credentials and a smoke artifact behind them - plus Slack, GitHub, Linear,
+Stripe, Twilio, Google Drive and Google Sheets, written against each
+provider's documented REST API and exercised through the gate against their
+fakes in `warrant/fakes.py`, with no account connected. `warrant/registry.py`
+is the table naming which is which.
 
 One rule governs this package: **only the broker may import it.** The agent
 side of the system never gets a handle to anything in here, which is the

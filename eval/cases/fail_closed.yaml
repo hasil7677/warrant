@@ -80,12 +80,18 @@ cases:
       decision: DENY
       rule: recipient_scope
 
-  - name: a tool the policy has never heard of
+  - name: a tool the registry has never heard of
+    # slack.post_message used to be this case's example. That stopped being a
+    # good one the moment Slack became a real app in the registry - the case
+    # would have started silently testing unknown_param instead of
+    # unknown_tool, and both refuse, so nothing here would have caught the
+    # drift. A tool namespaced under an app that does not exist stays a
+    # reliable example of "nobody wrote a rule against this at all".
     thread: *thread
     proposal:
-      tool: slack.post_message
+      tool: zoom.create_meeting
       params:
-        to: [recruiter@brightlane.io]
+        topic: "Intro call"
     expect:
       decision: DENY
       rule: unknown_tool

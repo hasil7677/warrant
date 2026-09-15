@@ -20,6 +20,26 @@ Three things it deliberately does NOT do:
   • **It states which apps it is talking to, on screen, at all times.** A demo
     where you cannot tell fakes from live calls is a demo that proves nothing.
 
+## The suite and the workflow runner
+
+Two additions beyond the original three-app scenario, both read-only views
+over machinery that already exists elsewhere and neither one a new path to an
+app:
+
+  • `GET /api/suite` returns `warrant.registry.suite_summary()` verbatim -
+    every app, its liveness (`proven-live` vs `fake-only`), the evidence
+    artifact behind a live claim, and the capability classes in play. The
+    console does not compute this; it reads the same table the gate does.
+  • `POST /api/workflow/run` streams a workflow file's steps the same way
+    `/api/run` streams the scripted scenario - one `Broker.execute` per step,
+    one SSE frame per verdict. It is `warrant.workflow.iter_workflow_steps`
+    with a pause between frames for the screen, nothing more; the halt/
+    continue semantics are the runner's, not the console's.
+
+The ten fake-only apps stay fakes here regardless of the live toggle - there
+are no credentials for them to use. Only gmail/calendar/notion have a live
+mode, exactly as before.
+
 Run:
     python -m uvicorn server.app:app --reload --port 8000
     (or: python server/app.py)
@@ -47,8 +67,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from warrant import fakes as fakes_mod  # noqa: E402
 from warrant import journal as journal_mod  # noqa: E402
 from warrant import policy as policy_mod  # noqa: E402
+from warrant import registry as registry_mod  # noqa: E402
+from warrant import workflow as workflow_mod  # noqa: E402
 from warrant.broker import Broker  # noqa: E402
 from warrant.contract import (  # noqa: E402
     ACTIONS,
@@ -62,6 +85,7 @@ from warrant.fakes import FakeCalendar, FakeGmail, FakeNotion, seed_thread  # no
 from warrant.ledger import Ledger  # noqa: E402
 
 STATIC = Path(__file__).parent / "static"
+WORKFLOWS_DIR = ROOT / "workflows"
 
 THREAD_ID = "t-inbound-1"
 PARTICIPANTS = ["sahil@brightlane.io", "recruiter@brightlane.io"]
@@ -321,6 +345,7 @@ class Session:
     gmail: Any = None
     calendar: Any = None
     notion: Any = None
+    apps: dict[str, Any] = field(default_factory=dict)  # the ten fake-only apps
     broker: Any = None
 
     def bind(self) -> None:
@@ -345,13 +370,34 @@ class Session:
         else:
             self.gmail, self.calendar, self.notion = FakeGmail(), FakeCalendar(), FakeNotion()
             self.gmail.threads[THREAD_ID] = seed_thread(THREAD_ID, PARTICIPANTS, SUBJECT, BODY)
-        self.broker = Broker(gmail=self.gmail, calendar=self.calendar,
-                             notion=self.notion, ledger=Ledger(self.dir / "ledger.db"))
+        # The other ten apps in the suite have no live credentials at all -
+        # they stay fakes whether or not the live toggle is on. `apps=` is the
+        # same general path `Broker.__init__` documents for callers beyond
+        # gmail/calendar/notion.
+        self.apps = {
+            name: getattr(fakes_mod, spec.fake)()
+            for name, spec in registry_mod.APPS.items()
+            if name not in ("gmail", "calendar", "notion")
+        }
+        self.broker = Broker(gmail=self.gmail, calendar=self.calendar, notion=self.notion,
+                             apps=self.apps, ledger=Ledger(self.dir / "ledger.db"))
 
     def ledgers(self) -> dict[str, int]:
         return {"gmail": self.gmail.count if self.live else len(self.gmail.sent),
                 "calendar": self.calendar.count if self.live else len(self.calendar.created),
                 "notion": self.notion.count if self.live else len(self.notion.pages)}
+
+    def suite_ledgers(self) -> dict[str, int]:
+        """How many actions actually reached each of the other ten apps this
+        session, read from the broker's own effect ledger rather than by
+        hand-counting each fake's differently-named list - the same method
+        `eval/run.py` uses for its multi-app report."""
+        counts: dict[str, int] = {name: 0 for name in self.apps}
+        for tool in self.broker.ledger.tools_executed_today():
+            app_name = registry_mod.app_of(tool)
+            if app_name in counts:
+                counts[app_name] += 1
+        return counts
 
 
 # Identifies this server process. A page loaded from an earlier process is
@@ -392,6 +438,47 @@ class RunIn(BaseModel):
     live: bool = False
     kill_switch: bool = False
     delete_policy: bool = False
+
+
+class WorkflowRunIn(BaseModel):
+    session: Optional[str] = None
+    workflow: str  # filename under workflows/, e.g. "incident_response.yaml"
+    live: bool = False
+    kill_switch: bool = False
+    delete_policy: bool = False
+
+
+@app.get("/api/suite")
+def api_suite() -> dict:
+    """Every app in the suite, its liveness, and the capability classes in
+    play - read straight from `warrant.registry.suite_summary()`. No session:
+    this is the same table regardless of which sandbox is asking."""
+    return registry_mod.suite_summary()
+
+
+@app.get("/api/workflows")
+def api_workflows() -> dict:
+    """The example workflow files under workflows/, parsed enough to list
+    their steps - loaded fresh on every call, not cached, so an edited
+    workflow file shows up without restarting the server."""
+    items = []
+    for path in sorted(WORKFLOWS_DIR.glob("*.yaml")):
+        try:
+            spec = workflow_mod.load_workflow(path)
+        except workflow_mod.WorkflowError as exc:
+            items.append({"file": path.name, "error": str(exc)})
+            continue
+        items.append({
+            "file": path.name,
+            "name": spec.get("name", path.stem),
+            "description": (spec.get("description") or "").strip(),
+            "on_step_refused": spec.get("on_step_refused", workflow_mod.ON_REFUSED_HALT),
+            "steps": [
+                {"id": s["id"], "tool": s["tool"], "on_refused": s.get("on_refused")}
+                for s in spec["steps"]
+            ],
+        })
+    return {"workflows": items}
 
 
 @app.get("/api/session")
@@ -639,6 +726,86 @@ async def api_run(body: RunIn) -> StreamingResponse:
                 }
                 yield f"data: {json.dumps(payload)}\n\n"
             yield f"data: {json.dumps({'done': True, 'ledgers': s.ledgers()})}\n\n"
+        finally:
+            if body.delete_policy and saved is not None:
+                pol.write_text(saved, encoding="utf-8")
+            if ks.exists():
+                ks.unlink()
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/workflow/run")
+async def api_workflow_run(body: WorkflowRunIn) -> StreamingResponse:
+    """Stream a workflow file's steps, one server-sent event per verdict -
+    the multi-app, multi-step counterpart to `/api/run`.
+
+    This calls `warrant.workflow.iter_workflow_steps` directly: the SAME
+    generator `python -m warrant.workflow` and the test suite drive, paced
+    with a sleep between frames purely so the run is watchable on screen. No
+    part of the halt/continue decision is made here - that is the runner's
+    job, reached through the same broker `/api/run` uses, over the same
+    policy sandbox.
+    """
+    s = get_session(body.session)
+    s.live = body.live
+
+    path = WORKFLOWS_DIR / body.workflow
+    if not path.resolve().is_relative_to(WORKFLOWS_DIR.resolve()) or not path.exists():
+        raise HTTPException(status_code=404, detail=f"no workflow named {body.workflow!r}")
+    try:
+        spec = workflow_mod.load_workflow(path)
+    except workflow_mod.WorkflowError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Same reset-between-runs reasoning as /api/run: a fresh ledger so a
+    # second press of Run does not refuse everything as a duplicate of the
+    # first, and fresh fakes (including the ten beyond gmail/calendar/notion)
+    # so one workflow's effects never leak into the next run's ledgers.
+    led = s.dir / "ledger.db"
+    if led.exists():
+        led.unlink()
+    s.reset_apps()
+
+    ks = s.dir / "KILL_SWITCH"
+    if body.kill_switch:
+        ks.write_text("", encoding="utf-8")
+    elif ks.exists():
+        ks.unlink()
+
+    pol = s.dir / "policy.yaml"
+    saved = pol.read_text(encoding="utf-8") if pol.exists() else None
+    if body.delete_policy and pol.exists():
+        pol.unlink()
+
+    async def gen():
+        state = workflow_mod.RunState()
+        try:
+            total = len(spec["steps"])
+            for i, result in enumerate(workflow_mod.iter_workflow_steps(spec, s.broker, state)):
+                await asyncio.sleep(0.45)
+                payload = {
+                    "index": i,
+                    "total": total,
+                    "step_id": result.step_id,
+                    "tool": result.tool,
+                    "params": result.params,
+                    "status": result.status,
+                    "allowed": result.allowed,
+                    "rule_ids": list(dict.fromkeys(result.rule_ids)),
+                    "reasons": result.reasons,
+                    "external_id": result.external_id,
+                    "error": result.error,
+                    "live": bool(body.live),
+                    "ledgers": s.ledgers(),
+                    "suite_ledgers": s.suite_ledgers(),
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+            yield f"data: {json.dumps({'done': True, 'halted_at': state.halted_at, 'skipped': state.skipped, 'ledgers': s.ledgers(), 'suite_ledgers': s.suite_ledgers()})}\n\n"
+        except workflow_mod.WorkflowError as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
         finally:
             if body.delete_policy and saved is not None:
                 pol.write_text(saved, encoding="utf-8")

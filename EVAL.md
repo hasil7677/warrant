@@ -1,8 +1,8 @@
 # Evaluation - what the gate did, and what reached the apps
 
-`eval_20260913T223552Z.json` is the machine-readable record of this run; the numbers below are read from it rather than typed in by hand.
+`eval_20260915T054143Z.json` is the machine-readable record of this run; the numbers below are read from it rather than typed in by hand.
 
-**20/20 cases passed** (3/3 expected-allow, 17/17 expected-deny). Actions that reached an app without the case budgeting for one: **0**.
+**29/29 cases passed** (6/6 expected-allow, 23/23 expected-deny). Actions that reached an app without the case budgeting for one: **0**.
 
 ## What this measures, and what it does not
 
@@ -14,7 +14,7 @@
 
 ## Rules exercised
 
-`body_containment` `domain_allowlist` `duplicate_action` `kill_switch` `no_distribution_lists` `notion_parent_allowlist` `policy_missing` `policy_unreadable` `recipient_scope` `unknown_param` `unknown_tool` 
+`body_containment` `destination_allowlist` `domain_allowlist` `duplicate_action` `irreversible_gate` `kill_switch` `no_distribution_lists` `notion_parent_allowlist` `policy_missing` `policy_unreadable` `recipient_scope` `spend_cap` `unknown_param` `unknown_tool` 
 
 ## Cases
 
@@ -39,7 +39,16 @@
 | ✅ | DENY | kill switch wins even with no policy at all | `REJECTED_BY_POLICY_GATE` | `kill_switch` | 0/0 |
 | ✅ | DENY | no thread id - nothing to scope recipients against | `REJECTED_BY_POLICY_GATE` | `recipient_scope` | 0/0 |
 | ✅ | DENY | thread id that cannot be read | `REJECTED_BY_POLICY_GATE` | `recipient_scope` | 0/0 |
-| ✅ | DENY | a tool the policy has never heard of | `REJECTED_BY_POLICY_GATE` | `unknown_tool` | 0/0 |
+| ✅ | DENY | a tool the registry has never heard of | `REJECTED_BY_POLICY_GATE` | `unknown_tool` | 0/0 |
+| ✅ | ALLOW | slack post to the allowlisted channel | `EXECUTED` |  -  | 1/1 |
+| ✅ | DENY | slack post to a channel nobody allowlisted | `REJECTED_BY_POLICY_GATE` | `destination_allowlist` | 0/0 |
+| ✅ | ALLOW | github issue on the allowlisted repo | `EXECUTED` |  -  | 1/1 |
+| ✅ | DENY | github issue on a repo nobody allowlisted | `REJECTED_BY_POLICY_GATE` | `destination_allowlist` | 0/0 |
+| ✅ | DENY | github merge is not on the irreversible allowlist | `REJECTED_BY_POLICY_GATE` | `irreversible_gate` | 0/0 |
+| ✅ | DENY | stripe refund is refused twice over | `REJECTED_BY_POLICY_GATE` | `destination_allowlist`, `irreversible_gate` | 0/0 |
+| ✅ | ALLOW | refund within the per-action spend cap | `EXECUTED` |  -  | 1/1 |
+| ✅ | DENY | refund over the per-action spend cap | `REJECTED_BY_POLICY_GATE` | `spend_cap` | 0/0 |
+| ✅ | DENY | refund in a currency the cap was not written for | `REJECTED_BY_POLICY_GATE` | `spend_cap` | 0/0 |
 
 ## Reproduce
 

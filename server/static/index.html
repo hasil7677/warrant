@@ -115,6 +115,31 @@
   .mode{font:11px/1 var(--mono);padding:5px 9px;border-radius:999px;
         border:1px solid var(--line);color:var(--amber)}
   .mode.live{color:var(--red);border-color:var(--red);background:#2a1414}
+
+  .suite-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));
+              gap:7px;margin-bottom:4px}
+  .app-badge{border:1px solid var(--line);border-radius:8px;padding:8px 9px;
+             background:var(--panel);font-size:11.5px}
+  .app-badge .name{font-weight:650;color:var(--ink)}
+  .app-badge .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+                  margin-right:6px;vertical-align:1px}
+  .app-badge.live .dot{background:var(--mint)}
+  .app-badge.fake .dot{background:var(--amber)}
+  .app-badge .liveness{display:block;margin-top:3px;color:var(--dim);font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:.05em}
+
+  .wf-controls{display:flex;gap:6px;margin-bottom:9px}
+  .wf-controls select{flex:1;background:#0a0b0e;color:var(--ink);border:1px solid var(--line);
+                      border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px}
+  .wf-desc{font-size:11.5px;color:var(--dim);margin:0 0 9px}
+  .wf-step{border:1px solid var(--line);border-left-width:3px;border-radius:9px;
+           background:var(--panel);padding:10px 12px;margin-bottom:8px}
+  .wf-step.allow{border-left-color:var(--mint)}
+  .wf-step.deny{border-left-color:var(--red)}
+  .wf-step.skip{border-left-color:var(--dim);opacity:.55}
+  .wf-step .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .wf-halt{background:#2a1d14;border:1px solid #3d2a18;color:var(--amber);
+           border-radius:8px;padding:9px 11px;font-size:11.5px;margin-top:4px}
 </style>
 </head>
 <body>
@@ -162,6 +187,15 @@
       <div class="who" id="participants">loading...</div>
       <div class="bodytext" id="threadbody"></div>
     </div>
+
+    <h2 style="margin-top:20px">the suite</h2>
+    <p class="cap">Every app this gate governs, read from
+      <code>warrant.registry</code> - the same table the policy rules read.
+      Green means live credentials and a smoke artifact exist; amber means
+      the adapter is real but has never made a real call.</p>
+    <div class="suite-grid" id="suite-grid">
+      <div class="empty">loading...</div>
+    </div>
   </section>
 
   <section class="col">
@@ -180,11 +214,23 @@
     <p class="note">Every verdict here is the real gate deciding. The console has no override
       control and no way to reach an app on its own: a console that could force an action
       would just be a credential with a nicer font.</p>
+
+    <h2 style="margin-top:22px">the workflow runner</h2>
+    <p class="cap">A declarative multi-step run across several apps. Every step
+      is a separate call to the same <code>Broker.execute</code> above - a
+      refused step halts (or branches, or lets the run continue) exactly as
+      the workflow file declares, never silently.</p>
+    <div class="wf-controls">
+      <select id="wf-select"><option>loading...</option></select>
+      <button id="wf-run">Run workflow</button>
+    </div>
+    <p class="wf-desc" id="wf-desc"></p>
+    <div id="wf-feed"><div class="empty">Pick a workflow and press <b>Run workflow</b>.</div></div>
   </section>
 </main>
 
 <script>
-let SID = null, PRISTINE = '', BOOT = null;
+let SID = null, PRISTINE = '', BOOT = null, SUITE_LOADED = false, WORKFLOWS = [];
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -205,6 +251,7 @@ async function boot(){
     $('participants').textContent = d.thread.participants.join('    ');
     $('threadbody').textContent = d.thread.body;
     setLedgers(d.ledgers);
+    if (!SUITE_LOADED){ SUITE_LOADED = true; loadSuite(); loadWorkflows(); }
   }catch(e){
     $('participants').textContent = 'could not reach the server';
     $('feed').innerHTML = '<div class="err">Could not load. Is the server still running?</div>';
@@ -382,6 +429,130 @@ function render(d){
     (d.external_id ? '<div class="eid">created: ' + esc(d.external_id) +
         (d.live ? ' (real object, check the app)' : '') + '</div>' : '');
   $('feed').appendChild(el);
+  el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+// ── the suite ─────────────────────────────────────────────────────────────
+// Read-only: this panel renders exactly what /api/suite returns, which is
+// warrant.registry.suite_summary() with nothing computed on top of it. The
+// console does not decide what counts as live - the registry does.
+
+async function loadSuite(){
+  try{
+    const r = await fetch('/api/suite', {cache:'no-store'});
+    const d = await r.json();
+    const grid = $('suite-grid');
+    grid.innerHTML = '';
+    for (const app of d.apps){
+      const live = app.liveness === 'proven-live';
+      const el = document.createElement('div');
+      el.className = 'app-badge ' + (live ? 'live' : 'fake');
+      el.innerHTML =
+        '<span class="dot"></span><span class="name">' + esc(app.title) + '</span>' +
+        '<span class="liveness">' + esc(app.liveness) + '</span>';
+      el.title = live
+        ? 'evidence: ' + (app.evidence || '(none cited)')
+        : (app.note || 'no live credential');
+      grid.appendChild(el);
+    }
+  }catch(e){
+    $('suite-grid').innerHTML = '<div class="empty">could not load the suite</div>';
+  }
+}
+
+// ── the workflow runner ──────────────────────────────────────────────────
+
+async function loadWorkflows(){
+  try{
+    const r = await fetch('/api/workflows', {cache:'no-store'});
+    const d = await r.json();
+    WORKFLOWS = d.workflows.filter(w => !w.error);
+    const sel = $('wf-select');
+    sel.innerHTML = WORKFLOWS.map(w =>
+      '<option value="' + esc(w.file) + '">' + esc(w.name) + ' (' + w.steps.length + ' steps)</option>'
+    ).join('');
+    updateWfDesc();
+  }catch(e){
+    $('wf-select').innerHTML = '<option>could not load workflows</option>';
+  }
+}
+
+function updateWfDesc(){
+  const w = WORKFLOWS.find(x => x.file === $('wf-select').value);
+  $('wf-desc').textContent = w ? w.description : '';
+}
+$('wf-select').addEventListener('change', updateWfDesc);
+
+$('wf-run').onclick = async () => {
+  const file = $('wf-select').value;
+  if (!file) return;
+  $('wf-run').disabled = true;
+  $('wf-feed').innerHTML = '';
+
+  const res = await fetch('/api/workflow/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      session: SID, workflow: file, live: $('live').checked,
+      kill_switch: $('ks').checked, delete_policy: $('nopol').checked,
+    }),
+  });
+
+  if (!res.ok){
+    let msg = 'Request failed.';
+    try { msg = (await res.json()).detail || msg; } catch {}
+    $('wf-feed').innerHTML = '<div class="err">' + esc(msg) + '</div>';
+    $('wf-run').disabled = false; return;
+  }
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true){
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0){
+      const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+      if (!frame.startsWith('data: ')) continue;
+      const d = JSON.parse(frame.slice(6));
+      if (d.error){
+        $('wf-feed').insertAdjacentHTML('beforeend', '<div class="err">' + esc(d.error) + '</div>');
+        continue;
+      }
+      if (d.done){
+        setLedgers(d.ledgers);
+        if (d.halted_at){
+          $('wf-feed').insertAdjacentHTML('beforeend',
+            '<div class="wf-halt">Halted at <b>' + esc(d.halted_at) + '</b>. Never attempted: ' +
+            (d.skipped.length ? d.skipped.map(esc).join(', ') : '(nothing after it)') + '.</div>');
+        }
+        continue;
+      }
+      renderWfStep(d); setLedgers(d.ledgers);
+    }
+  }
+  $('wf-run').disabled = false;
+};
+
+function renderWfStep(d){
+  const el = document.createElement('div');
+  el.className = 'wf-step ' + (d.allowed ? 'allow' : 'deny');
+  const rules = (d.rule_ids||[]).map(r => '<span class="rule">' + esc(r) + '</span>').join('');
+  const reason = (d.reasons||[])[0];
+  el.innerHTML =
+    '<div class="top">' +
+      '<span class="verdict ' + (d.allowed?'allow':'deny') + '">' +
+        (d.allowed ? 'HAPPENED' : 'STOPPED') + '</span>' +
+      '<span class="tool">' + esc(d.tool) + '</span>' +
+      '<span class="label">' + esc(d.step_id) + '</span>' +
+    '</div>' +
+    (rules ? '<div class="rules">' + rules + '</div>' : '') +
+    (reason && !d.allowed ? '<div class="reason">' + esc(reason) + '</div>' : '') +
+    (d.error ? '<div class="reason">error: ' + esc(d.error) + '</div>' : '') +
+    (d.external_id ? '<div class="eid">created: ' + esc(d.external_id) +
+        (d.live ? ' (real object, check the app)' : '') + '</div>' : '');
+  $('wf-feed').appendChild(el);
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
 }
 

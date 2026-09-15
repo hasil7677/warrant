@@ -85,6 +85,48 @@ MUTATIONS = [
         replace="    if False:  # MUTATION",
         why="a bypass-shaped param like confirmed=true is accepted rather than refused",
     ),
+    # ── the four rules the multi-app suite added ─────────────────────────
+    # Each disables the one line that makes an "absence means nothing is
+    # authorized" rule actually refuse the absent case - the same shape as
+    # fail-open-on-missing-policy above, for the four rules that generalize
+    # across all thirteen apps instead of naming one.
+    Mutation(
+        name="destination-allowlist-membership-not-checked",
+        file="warrant/policy.py",
+        find="    if dest not in allowed_for_tool:",
+        replace="    if False:  # MUTATION",
+        why="a write lands at a destination nobody put on the allowlist for that tool",
+    ),
+    Mutation(
+        name="spend-cap-ignores-per-action-limit",
+        file="warrant/policy.py",
+        find="    if per_action is not None and amount > int(per_action):",
+        replace="    if False:  # MUTATION",
+        why="a single action can move an unbounded amount of money regardless of max_per_action_minor",
+    ),
+    Mutation(
+        name="irreversible-gate-open-by-default",
+        file="warrant/policy.py",
+        find="    if proposal.tool not in allowed:",
+        replace="    if False:  # MUTATION",
+        why="an irreversible action runs without ever being named in allowed_tools",
+    ),
+    Mutation(
+        name="audience-bound-uncapped",
+        file="warrant/policy.py",
+        find="    if key not in already_reached and len(already_reached) + 1 > int(cap):",
+        replace="    if False:  # MUTATION",
+        why="a fan-out tool can reach an unbounded number of distinct audiences per day",
+    ),
+    # ── the reliability fix from the Part 2 findings ─────────────────────
+    Mutation(
+        name="ambiguous-retry-not-refused",
+        file="warrant/broker.py",
+        find="        if self.ledger.pending_attempt(idem_key):",
+        replace="        if False:  # MUTATION",
+        why="a retry of a proposal whose prior attempt has an unknown outcome is performed "
+            "again instead of refused, which can duplicate a write that already landed",
+    ),
 ]
 
 

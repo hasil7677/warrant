@@ -157,6 +157,93 @@ def notion_token() -> str:
     return token
 
 
+# ── the seven fake-only apps ─────────────────────────────────────────────────
+# None of these have ever been called with real credentials - see
+# `warrant.registry` for the liveness table. The functions exist anyway,
+# because the honest boundary is "no account was ever connected", not "the code
+# to connect one does not exist". Each raises AuthError with the same shape as
+# notion_token: which env var, where to get the value, one line to set it.
+
+
+def _env_token(var: str, hint: str) -> str:
+    """Shared shape for a single-env-var credential. Not exported - every
+    caller below is a named function, because a name in this file's exports is
+    what makes `grep AuthError` a way to enumerate every app that needs setup,
+    not a generic helper nobody can find by app name."""
+    value = os.getenv(var, "").strip()
+    if not value:
+        raise AuthError(f"{var} is not set.\n{hint}")
+    return value
+
+
+def slack_token() -> str:
+    return _env_token(
+        "SLACK_BOT_TOKEN",
+        "  1. api.slack.com/apps -> your app -> OAuth & Permissions -> Bot User OAuth Token\n"
+        "  2. set SLACK_BOT_TOKEN=xoxb-...   (PowerShell: $env:SLACK_BOT_TOKEN='xoxb-...')",
+    )
+
+
+def github_token() -> str:
+    return _env_token(
+        "GITHUB_TOKEN",
+        "  1. github.com/settings/personal-access-tokens -> Fine-grained token,\n"
+        "     scoped to the one repository this agent may touch\n"
+        "  2. set GITHUB_TOKEN=github_pat_...",
+    )
+
+
+def linear_api_key() -> str:
+    return _env_token(
+        "LINEAR_API_KEY",
+        "  1. linear.app -> Settings -> API -> Personal API keys -> Create key\n"
+        "  2. set LINEAR_API_KEY=lin_api_...",
+    )
+
+
+def stripe_api_key() -> str:
+    return _env_token(
+        "STRIPE_API_KEY",
+        "  1. dashboard.stripe.com/apikeys -> Secret key\n"
+        "  2. set STRIPE_API_KEY=sk_...\n"
+        "  A key that moves real money deserves more caution than an env var -\n"
+        "  this project never wired one up, live or test-mode, for exactly that reason.",
+    )
+
+
+def twilio_credentials() -> tuple[str, str]:
+    """Account SID and auth token - Twilio's REST API takes both, as HTTP Basic
+    auth, so there is no single-token variant to fall back to."""
+    sid = _env_token(
+        "TWILIO_ACCOUNT_SID",
+        "  1. console.twilio.com -> Account Info -> Account SID\n"
+        "  2. set TWILIO_ACCOUNT_SID=AC...",
+    )
+    token = _env_token(
+        "TWILIO_AUTH_TOKEN",
+        "  1. console.twilio.com -> Account Info -> Auth Token\n"
+        "  2. set TWILIO_AUTH_TOKEN=<token>",
+    )
+    return sid, token
+
+
+def google_drive_sheets_creds():
+    """Drive and Sheets would reuse `get_google_creds()` - same OAuth user, same
+    cached token.json - except the cached token only carries the gmail and
+    calendar scopes this project has actually run against. Requesting drive.file
+    or spreadsheets scopes would force a fresh consent and invalidate that
+    token, which would break the one live path this repo has evidence for. So
+    this raises rather than silently widening the scope list nobody asked for.
+    """
+    raise AuthError(
+        "Drive and Sheets need drive.file / spreadsheets scopes that token.json does "
+        "not carry. Re-running `python -m warrant.auth` after adding those scopes to "
+        "warrant/auth.py's SCOPES list would fetch a token that has them - deliberately "
+        "not done automatically, because that is a live re-consent this project chose "
+        "not to force on the one working credential it has."
+    )
+
+
 def anthropic_key() -> str:
     key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not key:

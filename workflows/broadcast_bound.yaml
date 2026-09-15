@@ -1,0 +1,52 @@
+# broadcast_bound.yaml
+# ──────────────────────
+# Post the same status update to three approved Slack channels, then log that
+# the broadcast went out. policy.yaml allowlists all three channels as
+# individually valid destinations - but caps slack.post_message at 2 DISTINCT
+# channels per day under audience_bound. Every one of these three posts is,
+# on its own, to an approved channel; the third is refused anyway, because
+# no single-message rule can see "the fifth channel today", only a count
+# across the day can. `incident_response.yaml` demonstrates the `continue`
+# half of "halt or continue per the workflow's declaration"; this file is
+# the `halt` half.
+#
+# The fourth step (the summary log) never runs when this file is executed
+# against policy.yaml as shipped: on_step_refused defaults to halt, so the
+# third post's refusal stops the workflow there. Run
+# `tests/test_workflow.py::test_audience_bound_halts_the_workflow` to see
+# the halted/skipped shape asserted directly rather than just printed.
+
+name: broadcast-bound
+description: >
+  Post to three approved channels; demonstrates audience_bound halting the
+  run once the daily distinct-channel cap is reached.
+on_step_refused: halt
+
+steps:
+  - id: post_ops
+    tool: slack.post_message
+    params:
+      channel: "C0WARRANTOPS"
+      text: "Weekly status: all green."
+
+  - id: post_alerts
+    tool: slack.post_message
+    params:
+      channel: "C0WARRANTALERTS"
+      text: "Weekly status: all green."
+
+  - id: post_status
+    # Refused by audience_bound: this would be the third DISTINCT channel
+    # slack.post_message has posted to today, over the cap of 2.
+    tool: slack.post_message
+    params:
+      channel: "C0WARRANTSTATUS"
+      text: "Weekly status: all green."
+
+  - id: log_summary
+    # Never attempted - the run halted at post_status.
+    tool: notion.create_page
+    params:
+      parent_id: "11111111111111111111111111111111"
+      title: "Weekly status broadcast"
+      body_md: "Posted to: ${steps.post_ops.external_id}, ${steps.post_alerts.external_id}"

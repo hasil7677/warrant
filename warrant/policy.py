@@ -2,8 +2,8 @@
 policy.py
 ─────────
 The gate. Every Proposal the model produces passes through `check()` before the
-broker is allowed to touch Gmail, Calendar or Notion - and `check()` answers out
-of a file this package cannot write.
+broker is allowed to touch any of the thirteen apps in the suite - and
+`check()` answers out of a file this package cannot write.
 
 The shape of the argument, ported from the trading gate this is modelled on:
 
@@ -28,6 +28,30 @@ to the human who signed it.
 `check()` collects every failure rather than returning on the first one, so a
 refusal names all of what is wrong with a proposal instead of sending the model
 round the loop to discover the objections one at a time.
+
+## What changed for the multi-app suite
+
+The original six rules were written against three apps' worth of field names:
+`recipient_scope` knew `to` / `cc` / `bcc` / `attendees`, `notion_parent_allowlist`
+knew `parent_id`. That does not extend to thirteen apps - a rule that has to be
+taught a new field name for every app is a rule that is one release behind the
+app list, forever.
+
+So the field names came out of this file and into `warrant.registry`, which is
+the only new import below. `_RECIPIENT_FIELDS` and `_IDEMPOTENCY_PARAMS` are now
+*computed* from every tool's `ToolSpec` instead of typed out per app - which
+means `recipient_scope`, `domain_allowlist` and `no_distribution_lists` apply to
+a new tool the moment it declares `recipient_kind="email"`, with no change to
+this file at all. That is the whole thesis of the registry, demonstrated in the
+two module-level dicts just below the imports.
+
+Four rules are new, and each reasons about a capability class rather than an
+app: `destination_allowlist` generalizes `notion_parent_allowlist` to every
+other tool that writes to a named place; `spend_cap` bounds anything the
+registry marks `spend`; `irreversible_gate` requires an explicit allowlist for
+anything marked `irreversible`; `audience_bound` caps how many distinct
+fan-out destinations a tool may reach in a day. None of the four mention an
+app by name in their implementation - only in the policy.yaml a human writes.
 """
 
 from __future__ import annotations
@@ -52,6 +76,7 @@ try:  # imported as `warrant.policy` - the normal case
         ThreadFacts,
         Verdict,
     )
+    from . import registry as registry_mod
 except ImportError:  # imported as a bare module from inside the package directory
     from contract import (  # type: ignore[no-redef]
         ACTION_PARAMS,
@@ -63,6 +88,7 @@ except ImportError:  # imported as a bare module from inside the package directo
         ThreadFacts,
         Verdict,
     )
+    import registry as registry_mod  # type: ignore[no-redef]
 
 DATA_DIR = Path(os.getenv("WARRANT_DATA_DIR", ".warrant"))
 POLICY_FILE = Path(os.getenv("WARRANT_POLICY_FILE", "policy.yaml"))
@@ -72,23 +98,35 @@ KILL_SWITCH_LOCATIONS = [
     DATA_DIR / "KILL_SWITCH",
 ]
 
-# Which params of an action identify "the same action done twice". Deliberately
-# a subset: re-sending the identical mail with a reworded rationale is still the
-# same mail arriving in someone's inbox twice, so `rationale` is not in here and
-# neither is anything else the model can vary for free.
+# Which params of an action identify "the same action done twice", for every
+# tool in the registry. Deliberately a subset of each tool's params:
+# re-sending the identical mail with a reworded rationale is still the same
+# mail arriving in someone's inbox twice, so `rationale` is never in here and
+# neither is anything else the model can vary for free - see
+# `ToolSpec.idempotency_params` for where each tool draws that line.
 _IDEMPOTENCY_PARAMS: dict[str, tuple[str, ...]] = {
-    GMAIL_SEND: ("to", "cc", "bcc", "subject", "body"),
-    CALENDAR_CREATE_EVENT: ("attendees", "start_iso", "end_iso", "summary"),
-    NOTION_CREATE_PAGE: ("parent_id", "title"),
+    name: spec.idempotency_params for name, spec in registry_mod.TOOLS.items()
 }
 
-# Where each action's outbound recipients live. notion.create_page is absent on
-# purpose - a Notion page has no recipient list, it has a parent, which is a
-# different rule.
+# Where each action's outbound EMAIL recipients live, for every tool the
+# registry marks `recipient_kind="email"`. A tool with no recipient params (a
+# Notion page, a GitHub issue) is absent on purpose - it has a destination, not
+# a recipient list, which `destination_allowlist` governs instead.
 _RECIPIENT_FIELDS: dict[str, tuple[str, ...]] = {
-    GMAIL_SEND: ("to", "cc", "bcc"),
-    CALENDAR_CREATE_EVENT: ("attendees",),
+    name: spec.recipient_params
+    for name, spec in registry_mod.TOOLS.items()
+    if spec.recipient_kind == registry_mod.EMAIL and spec.recipient_params
 }
+
+# The subset of _RECIPIENT_FIELDS where the recipients must additionally be
+# scoped to a thread the broker read for itself. Only tools the registry marks
+# `scope="thread"` get that check - a Drive share invite has no email thread to
+# scope against, so it goes through domain_allowlist / no_distribution_lists
+# but not recipient_scope.
+_THREAD_SCOPED_TOOLS: frozenset[str] = frozenset(
+    name for name, spec in registry_mod.TOOLS.items()
+    if spec.scope == "thread" and name in _RECIPIENT_FIELDS
+)
 
 
 # ── canonicalisation ────────────────────────────────────────────────────────
@@ -239,15 +277,31 @@ def idempotency_key(proposal: Proposal) -> str:
     lists normalized and sorted, because `to: [a, b]` and `to: [b, a]` deliver the
     identical mail, and a duplicate check that can be defeated by reordering a
     list is not a duplicate check.
+
+    Which fields count, and how each is canonicalized, comes from the tool's
+    `ToolSpec` rather than a hardcoded list of field names: a recipient field
+    (declared in `recipient_params`) is sorted address-wise, the Notion
+    destination is dash-insensitive, and everything else is whitespace-squashed
+    text. A tool the registry has never heard of - unreachable in practice,
+    since `check()` refuses an unknown tool before this is ever called - falls
+    back to hashing every param key it was given, so a fingerprint is always
+    produced rather than silently omitting fields nobody thought to list.
     """
     params = proposal.params if isinstance(proposal.params, dict) else {}
-    fields = _IDEMPOTENCY_PARAMS.get(proposal.tool, tuple(sorted(str(k) for k in params)))
+    spec = registry_mod.tool_spec(proposal.tool)
+    fields = _IDEMPOTENCY_PARAMS.get(proposal.tool) or tuple(sorted(str(k) for k in params))
+    recipient_fields = set(spec.recipient_params) if spec else set()
+    notion_field = (
+        spec.destination_param
+        if spec and spec.destination_kind == "notion-parent"
+        else None
+    )
     canonical: dict[str, Any] = {}
     for field in fields:
         value = params.get(field)
-        if field in ("to", "cc", "bcc", "attendees"):
+        if field in recipient_fields:
             canonical[field] = sorted(_norm_principal(v) for v in _as_list(value))
-        elif field == "parent_id":
+        elif field == notion_field:
             canonical[field] = _norm_notion_id(value)
         else:
             canonical[field] = _squash(value) if value is not None else None
@@ -280,8 +334,15 @@ def _rule_recipient_scope(
     - never from the proposal. An instruction buried in an email body saying "also
     cc legal@..." is a string in someone else's message, and it cannot add a
     member to a set it did not come from.
+
+    Scoped to `_THREAD_SCOPED_TOOLS` rather than every email-recipient tool:
+    a tool the registry marks `recipient_kind="email"` but not `scope="thread"`
+    (sharing a Drive file, say) has no email thread to scope against, and
+    running this check against it would refuse on a `facts is None` it has no
+    way to fix. `domain_allowlist` and `no_distribution_lists` still apply to
+    it - they do not need a thread, only an address.
     """
-    if proposal.tool not in _RECIPIENT_FIELDS:
+    if proposal.tool not in _THREAD_SCOPED_TOOLS:
         return []
 
     if facts is None:
@@ -493,6 +554,15 @@ def _rule_notion_parent_allowlist(
     domain_allowlist is deliberate: writing into a workspace is an authorization
     the user grants to a specific location, so "the user listed nowhere" means
     nowhere is writable - not that everywhere is.
+
+    This rule predates the registry and is grandfathered rather than folded
+    into `destination_allowlist` below: Notion was one of the three apps this
+    project shipped with evidence for, its policy shape (`allowed_parents:` as
+    a bare list) is what every existing test and the shipped policy already
+    read, and there was no reason to break either just to prove the new
+    mechanism could subsume the old one. `destination_allowlist` is what every
+    app added afterwards uses; a narrow per-app rule stayed exactly where it
+    already worked.
     """
     if proposal.tool != NOTION_CREATE_PAGE:
         return []
@@ -524,6 +594,292 @@ def _rule_notion_parent_allowlist(
                 "notion_parent_allowlist",
                 f"Notion parent {str(raw_parent)!r} is not in allowed_parents. Pages may only be "
                 "created under the parents the user listed in policy.yaml.",
+            )
+        ]
+    return []
+
+
+def _rule_destination_allowlist(
+    proposal: Proposal, facts: Optional[ThreadFacts], cfg: dict[str, Any], ledger: Any
+) -> list[tuple[str, str]]:
+    """Generalizes `notion_parent_allowlist` to every other app with a place to
+    write.
+
+    A GitHub repo, a Slack channel, a Stripe payment intent, a Linear team -
+    every one of these is "the named place this write lands",
+    and the registry already says which param on which tool carries it
+    (`ToolSpec.destination_param`). This rule reads that instead of a per-app
+    field name, which is the property that makes it apply to app number
+    fourteen without a code change.
+
+    Configured per tool, because "the allowlisted place" means something
+    different for every tool and a single flat list would conflate a Slack
+    channel with a GitHub repo:
+
+        destination_allowlist:
+          allowed:
+            slack.post_message: ["C0123ABCD"]
+            github.create_issue: ["myorg/myrepo"]
+
+    A tool with a `destination_param` that is not named under `allowed` at all
+    is refused outright - same asymmetry as notion_parent_allowlist: the user
+    listing nowhere for a tool means nowhere is writable, not everywhere. Only
+    `notion.create_page` is exempt, because `notion_parent_allowlist` already
+    governs it and a write should not need two rules to name the same parent
+    twice under two different keys.
+    """
+    spec = registry_mod.tool_spec(proposal.tool)
+    if spec is None or not spec.destination_param:
+        return []
+    if spec.destination_kind == "notion-parent":
+        # notion.create_page is governed by notion_parent_allowlist above; see
+        # that rule's docstring for why it was grandfathered rather than
+        # folded into this one.
+        return []
+
+    params = proposal.params if isinstance(proposal.params, dict) else {}
+    raw_dest = params.get(spec.destination_param)
+    dest = _squash(raw_dest) if raw_dest is not None else ""
+
+    allowed_cfg = cfg.get("allowed") or {}
+    if not isinstance(allowed_cfg, dict):
+        allowed_cfg = {}
+    allowed_for_tool = {
+        _squash(v) for v in _as_list(allowed_cfg.get(proposal.tool)) if str(v).strip()
+    }
+
+    if not allowed_for_tool:
+        return [
+            (
+                "destination_allowlist",
+                f"No destinations are configured for {proposal.tool!r} under "
+                "destination_allowlist.allowed in policy.yaml, so there is nowhere this tool "
+                "may write. An empty or missing allowlist allows nothing.",
+            )
+        ]
+    if not dest:
+        return [
+            (
+                "destination_allowlist",
+                f"{proposal.tool} requires {spec.destination_param!r}; none was given, so the "
+                "destination cannot be checked against the allowlist.",
+            )
+        ]
+    if dest not in allowed_for_tool:
+        return [
+            (
+                "destination_allowlist",
+                f"Destination {str(raw_dest)!r} for {proposal.tool} is not in the allowlist "
+                f"configured for it. Writes may only land where the user listed in policy.yaml.",
+            )
+        ]
+    return []
+
+
+def _rule_spend_cap(
+    proposal: Proposal, facts: Optional[ThreadFacts], cfg: dict[str, Any], ledger: Any
+) -> list[tuple[str, str]]:
+    """Bound anything the registry marks `spend`, regardless of which app it is.
+
+    Two numbers, both optional and both in minor units (cents, not dollars -
+    the registry's `amount_param` is minor units for the same reason a payment
+    processor's API is: floating point has no business anywhere near money):
+
+        spend_cap:
+          currency: usd
+          max_per_action_minor: {stripe.create_refund: 50000}
+          max_per_day_minor: {stripe.create_refund: 200000}
+
+    The amount for THIS proposal comes from `amount_param` when the tool
+    states one (a refund names its own amount), or from `flat_cost_minor`
+    multiplied by the recipient count when it does not (an SMS costs a fixed
+    amount per message and the proposal never states a dollar figure - see
+    `ToolSpec.flat_cost_minor`). The running total comes from the ledger,
+    which only ever contains amounts for actions that actually executed, so a
+    refused or crashed attempt never inflates the day's spend.
+
+    A tool the config's currency does not match is refused rather than
+    summed - converting currencies inside a policy gate would be exactly the
+    kind of computation this file's docstring says the format cannot do.
+    """
+    if ledger is None:
+        return []
+    spec = registry_mod.tool_spec(proposal.tool)
+    if spec is None or registry_mod.SPEND not in spec.classes:
+        return []
+
+    params = proposal.params if isinstance(proposal.params, dict) else {}
+    currency = str(cfg.get("currency", spec.flat_cost_currency or "usd")).lower()
+
+    amount = 0
+    if spec.amount_param:
+        raw_amount = params.get(spec.amount_param)
+        try:
+            amount = int(raw_amount)
+        except (TypeError, ValueError):
+            return [
+                (
+                    "spend_cap",
+                    f"{proposal.tool} requires a numeric {spec.amount_param!r} in minor units; "
+                    f"got {raw_amount!r}. Refusing rather than guessing an amount.",
+                )
+            ]
+        proposal_currency = str(params.get(spec.currency_param) or currency).lower() if spec.currency_param else currency
+        if proposal_currency != currency:
+            return [
+                (
+                    "spend_cap",
+                    f"{proposal.tool} proposes currency {proposal_currency!r}, which does not "
+                    f"match the spend_cap currency {currency!r}. Refusing rather than converting.",
+                )
+            ]
+    elif spec.flat_cost_minor:
+        count = max(1, len(_as_list(params.get(spec.recipient_params[0]))) if spec.recipient_params else 1)
+        amount = int(spec.flat_cost_minor) * count
+
+    if amount <= 0:
+        return []
+
+    reasons: list[tuple[str, str]] = []
+    per_action = (cfg.get("max_per_action_minor") or {}).get(proposal.tool) if isinstance(cfg.get("max_per_action_minor"), dict) else None
+    if per_action is not None and amount > int(per_action):
+        reasons.append(
+            (
+                "spend_cap",
+                f"{proposal.tool} proposes {amount} minor {currency} units, over the per-action "
+                f"cap of {per_action}.",
+            )
+        )
+
+    per_day = (cfg.get("max_per_day_minor") or {}).get(proposal.tool) if isinstance(cfg.get("max_per_day_minor"), dict) else None
+    if per_day is not None:
+        try:
+            spent = int(ledger.spend_today(proposal.tool, currency))
+        except Exception as exc:
+            return reasons + [
+                (
+                    "spend_cap",
+                    f"Could not read the ledger to enforce the daily spend cap ({exc}). Actions "
+                    "are refused while spend cannot be verified.",
+                )
+            ]
+        if spent + amount > int(per_day):
+            reasons.append(
+                (
+                    "spend_cap",
+                    f"{proposal.tool} would bring today's {currency} spend to {spent + amount} "
+                    f"minor units, over the daily cap of {per_day} ({spent} already moved today).",
+                )
+            )
+    return reasons
+
+
+def _rule_irreversible_gate(
+    proposal: Proposal, facts: Optional[ThreadFacts], cfg: dict[str, Any], ledger: Any
+) -> list[tuple[str, str]]:
+    """An action the registry marks `irreversible` needs an explicit opt-in.
+
+    Every other rule in this file bounds WHO, WHERE or HOW MUCH; this one
+    bounds a different axis entirely - whether the action can be walked back
+    at all if it turns out to be wrong. `gmail.send` and `calendar.create_event`
+    are irreversible by the registry's strict definition (see its docstring)
+    and are exactly the actions this project was built to allow, so this rule
+    is an allowlist rather than a blanket ban: name the irreversible tools the
+    agent may use, and everything else irreversible is refused by default.
+
+        irreversible_gate:
+          allowed_tools: [gmail.send, calendar.create_event]
+
+    Missing or empty `allowed_tools` refuses every irreversible action - the
+    same "absence authorizes nothing" shape as the two allowlists above,
+    applied to the one hazard that has no undo button regardless of app.
+    """
+    spec = registry_mod.tool_spec(proposal.tool)
+    if spec is None or registry_mod.IRREVERSIBLE not in spec.classes:
+        return []
+
+    allowed = {str(t).strip() for t in _as_list(cfg.get("allowed_tools")) if str(t).strip()}
+    if proposal.tool not in allowed:
+        return [
+            (
+                "irreversible_gate",
+                f"{proposal.tool} cannot be undone through this tool surface, and it is not "
+                "listed in irreversible_gate.allowed_tools. An irreversible action requires an "
+                "explicit, per-tool opt-in - there is no default permission for something that "
+                "cannot be taken back.",
+            )
+        ]
+    return []
+
+
+def _rule_audience_bound(
+    proposal: Proposal, facts: Optional[ThreadFacts], cfg: dict[str, Any], ledger: Any
+) -> list[tuple[str, str]]:
+    """Cap how many DISTINCT fan-out destinations a tool may reach in a day.
+
+    `no_distribution_lists` bounds the blast radius of one message by refusing
+    the address that would fan it out. This rule bounds a different failure:
+    every individual message going to one pre-approved, small audience, but
+    the agent working through five, then ten, then all fifty allowlisted Slack
+    channels in a single run. Each message is legal on its own; the pattern is
+    not, and only a count across the day catches it.
+
+        audience_bound:
+          max_distinct_per_day:
+            slack.post_message: 3
+
+    Reads `ToolSpec.audience_param` for which field names the destination that
+    counts as "one more audience reached" - `channel` for Slack. A tool with
+    no audience_param and no recipients is not scoped by this rule at all, the
+    same as every other rule here returning `[]` for a tool it was never
+    written to grade.
+    """
+    if ledger is None:
+        return []
+    spec = registry_mod.tool_spec(proposal.tool)
+    if spec is None or registry_mod.AUDIENCE not in spec.classes:
+        return []
+
+    caps = cfg.get("max_distinct_per_day") or {}
+    cap = caps.get(proposal.tool) if isinstance(caps, dict) else None
+    if cap is None:
+        return []
+
+    params = proposal.params if isinstance(proposal.params, dict) else {}
+    field = spec.audience_param or (spec.recipient_params[0] if spec.recipient_params else None)
+    if not field:
+        return []
+    raw = params.get(field)
+    key = _squash(raw) if raw is not None else ""
+    if not key:
+        return [
+            (
+                "audience_bound",
+                f"{proposal.tool} requires {field!r} to identify its audience; none was given, "
+                "so the daily fan-out bound cannot be checked.",
+            )
+        ]
+
+    try:
+        already_reached = ledger.distinct_audience_today(proposal.tool)
+    except Exception as exc:
+        return [
+            (
+                "audience_bound",
+                f"Could not read the ledger to enforce the daily audience bound ({exc}). "
+                "Actions are refused while the fan-out count cannot be verified.",
+            )
+        ]
+
+    if key not in already_reached and len(already_reached) + 1 > int(cap):
+        nth = len(already_reached) + 1
+        suffix = "th" if 11 <= nth % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(nth % 10, "th")
+        return [
+            (
+                "audience_bound",
+                f"{proposal.tool} would reach a {nth}{suffix} distinct audience "
+                f"today ({str(raw)!r}), over the cap of {cap}. Already reached today: "
+                f"{sorted(already_reached)}.",
             )
         ]
     return []
@@ -602,6 +958,10 @@ RULES: dict[
     "no_distribution_lists": _rule_no_distribution_lists,
     "body_containment": _rule_body_containment,
     "notion_parent_allowlist": _rule_notion_parent_allowlist,
+    "destination_allowlist": _rule_destination_allowlist,
+    "spend_cap": _rule_spend_cap,
+    "irreversible_gate": _rule_irreversible_gate,
+    "audience_bound": _rule_audience_bound,
     "rate_limit": _rule_rate_limit,
 }
 

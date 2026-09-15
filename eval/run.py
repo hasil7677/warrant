@@ -41,9 +41,11 @@ sys.path.insert(0, str(ROOT))
 
 from warrant import journal as journal_mod  # noqa: E402
 from warrant import policy as policy_mod  # noqa: E402
+from warrant import registry as registry_mod  # noqa: E402
+from warrant import fakes as fakes_mod  # noqa: E402
 from warrant.broker import Broker  # noqa: E402
 from warrant.contract import STATUS_EXECUTED, Proposal  # noqa: E402
-from warrant.fakes import FakeCalendar, FakeGmail, FakeNotion, seed_thread  # noqa: E402
+from warrant.fakes import seed_thread  # noqa: E402
 from warrant.ledger import Ledger  # noqa: E402
 from warrant.provenance import write_artifact  # noqa: E402
 
@@ -91,7 +93,14 @@ def run_case(case: dict, tmp: Path) -> dict:
     if case.get("delete_policy"):
         policy_file.unlink()
 
-    gmail, cal, notion = FakeGmail(), FakeCalendar(), FakeNotion()
+    # A fresh fake for every app in the registry, not just the original three.
+    # `apps={...}` is the general path `Broker.__init__` documents; gmail,
+    # calendar and notion stay their own keyword for the same reason the
+    # broker keeps them named - they are the apps with a live smoke artifact
+    # behind them, and every other caller in this repo already constructs a
+    # Broker expecting those three names to work.
+    app_fakes = {name: getattr(fakes_mod, spec.fake)() for name, spec in registry_mod.APPS.items()}
+    gmail = app_fakes["gmail"]
     thread = case.get("thread")
     thread_id = None
     if thread:
@@ -103,8 +112,14 @@ def run_case(case: dict, tmp: Path) -> dict:
             thread.get("body", ""),
         )
 
-    broker = Broker(gmail=gmail, calendar=cal, notion=notion,
-                    ledger=Ledger(sandbox / "ledger.db"))
+    ledger = Ledger(sandbox / "ledger.db")
+    broker = Broker(
+        gmail=app_fakes.pop("gmail"),
+        calendar=app_fakes.pop("calendar"),
+        notion=app_fakes.pop("notion"),
+        apps=app_fakes,
+        ledger=ledger,
+    )
 
     spec = case["proposal"]
     results = []
@@ -131,8 +146,14 @@ def run_case(case: dict, tmp: Path) -> dict:
         failures.append(f"expected rule {want_rule!r}, got {final.get('rule_ids')}")
 
     # The side-effect check. This is the assertion that a status string cannot
-    # satisfy: on a refusal the app ledgers must be untouched.
-    reached = {"gmail": len(gmail.sent), "calendar": len(cal.created), "notion": len(notion.pages)}
+    # satisfy: on a refusal the ledger must be untouched. `tools_executed_today`
+    # reads the broker's own effect ledger - one row per action that actually
+    # reached an app, written only after `_perform` returns - so this check
+    # covers all thirteen apps without hand-counting each fake's own list.
+    executed = [registry_mod.app_of(t) or t for t in ledger.tools_executed_today()]
+    reached: dict[str, int] = {}
+    for app_name in executed:
+        reached[app_name] = reached.get(app_name, 0) + 1
     expected_side_effects = int(expect.get("side_effects", 1 if want_allow else 0))
     if sum(reached.values()) != expected_side_effects:
         failures.append(
