@@ -235,7 +235,7 @@ Both were live, both were found by running the stack rather than reading it, and
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # fill in Notion + Bedrock; the ten fake-only apps' vars are optional and unused by anything live
+cp .env.example .env        # fill in Notion + Bedrock; the seven fake-only apps' vars are optional and unused by anything live
 ```
 
 Then write a `policy.yaml` (start from the one in the repo history, or the tables above). **Nothing in the package will create it for you** - `tests/test_policy_adversarial.py::test_policy_file_is_never_written_by_the_package` walks the source and fails if any module writes that path.
