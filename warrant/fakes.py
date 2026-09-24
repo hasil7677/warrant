@@ -490,3 +490,52 @@ class FakeSheets:
     def clear_range(self, spreadsheet_id: str, range_a1: str) -> str:
         self.cleared.append({"spreadsheet_id": spreadsheet_id, "range_a1": range_a1})
         return f"{range_a1}:cleared"
+
+
+class FakeKite:
+    """Kite Connect stand-in. `orders` is the evidence ledger.
+
+    Unlike every other fake in this module, this one is never what
+    `Broker._client("kite")` actually returns in production - the platform
+    always supplies a real, tenant-authenticated `KiteConnect` instance
+    explicitly (see `registry.py`'s note on the `kite` AppSpec). This class
+    exists for warrant's own tests: it stands in for that real instance in
+    unit tests that construct `Broker(apps={"kite": FakeKite()})` without a
+    live account, and it is what `test_fake_matches_real_client_signature_
+    for_every_tool` compares against `warrant.apps.kite.place_order`'s real
+    signature.
+    """
+
+    def __init__(self) -> None:
+        self.orders: list[dict] = []
+        self._counter = 0
+
+    def place_order(
+        self,
+        variety: str,
+        exchange: str,
+        tradingsymbol: str,
+        transaction_type: str,
+        quantity: int,
+        product: str,
+        order_type: str,
+        price: Optional[float] = None,
+        trigger_price: Optional[float] = None,
+    ) -> str:
+        self._counter += 1
+        order_id = f"FAKE-ORDER-{self._counter:04d}"
+        self.orders.append(
+            {
+                "id": order_id,
+                "variety": variety,
+                "exchange": exchange,
+                "tradingsymbol": tradingsymbol,
+                "transaction_type": transaction_type,
+                "quantity": quantity,
+                "product": product,
+                "order_type": order_type,
+                "price": price,
+                "trigger_price": trigger_price,
+            }
+        )
+        return order_id

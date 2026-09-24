@@ -45,9 +45,20 @@ ALLOWED = "ALLOWED"
 REFUSED = "REFUSED"
 
 
-def _connect() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(JOURNAL_DB)
+def _connect(journal_path: Optional[Path] = None) -> sqlite3.Connection:
+    """Open the journal DB, defaulting to the module-global JOURNAL_DB.
+
+    `journal_path` is the per-tenant equivalent of Ledger's own `path:`
+    constructor argument (see ledger.py) - additive, and every existing
+    caller (omitting it) is byte-for-byte unaffected. Passed explicitly
+    rather than read from an env var per call, for the same reason
+    db.tenant_session() takes tenant_id as a plain argument: a value every
+    call site has to thread explicitly is a value a reviewer can see is
+    present at every call site.
+    """
+    path = journal_path if journal_path is not None else JOURNAL_DB
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS decisions (
@@ -73,15 +84,20 @@ def log_decision(
     verdict: Verdict,
     external_id: Optional[str] = None,
     error: Optional[str] = None,
+    journal_path: Optional[Path] = None,
 ) -> int:
     """Record one gate decision. Returns the row id.
 
     `error` is deliberately a separate column from the refusal path: a refusal
     is the system working and an exception is the system breaking, and a log
     that conflates them makes the reliability brief meaningless.
+
+    `journal_path`, when supplied, writes against that file instead of the
+    module-global `JOURNAL_DB` - see `_connect()`. Every existing caller
+    omits it and is unaffected.
     """
     now = datetime.now(timezone.utc)
-    conn = _connect()
+    conn = _connect(journal_path)
     cur = conn.execute(
         """
         INSERT INTO decisions

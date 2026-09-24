@@ -42,6 +42,7 @@ from warrant.registry import ACTION_PARAMS, ACTIONS  # noqa: F401  (re-exported)
 GMAIL_SEND = "gmail.send"
 CALENDAR_CREATE_EVENT = "calendar.create_event"
 NOTION_CREATE_PAGE = "notion.create_page"
+KITE_PLACE_ORDER = "kite.place_order"
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,32 @@ class Proposal:
             "thread_id": self.thread_id,
             "rationale": self.rationale,
         }
+
+
+@dataclass(frozen=True)
+class KiteFacts:
+    """What the platform layer read for itself before a kite proposal reaches
+    the gate - the same "never from the proposal" property ThreadFacts has,
+    applied to a per-tenant trading account instead of an email thread.
+
+    `mandate`/`kill_switch_reason`/`orders_today`/`value_today` are fetched
+    from Postgres by the platform (finLM-platform/api), BEFORE any Proposal
+    exists - there is no synchronous Postgres call available once
+    Broker.execute() is running. `live_quote` is the one fact that must be
+    fetched fresh at gate time (a stale quote is a claim about the market a
+    minute ago, not now), so it is filled in by a closure the platform hands
+    to Broker as a `facts_providers["kite"]` callable - see broker.py's
+    `_gather_facts()`. Neither half alone is enough to evaluate a kite
+    proposal; this dataclass is where both halves meet.
+    """
+
+    tenant_id: str
+    mandate: Optional[dict[str, Any]]
+    kill_switch_reason: Optional[str]
+    orders_today: int
+    value_today: float
+    live_quote: Optional[float]
+    quote_source: str = "unavailable"
 
 
 @dataclass(frozen=True)

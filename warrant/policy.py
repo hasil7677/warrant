@@ -73,6 +73,7 @@ try:  # imported as `warrant.policy` - the normal case
         GMAIL_SEND,
         NOTION_CREATE_PAGE,
         Proposal,
+        KiteFacts,
         ThreadFacts,
         Verdict,
     )
@@ -85,6 +86,7 @@ except ImportError:  # imported as a bare module from inside the package directo
         GMAIL_SEND,
         NOTION_CREATE_PAGE,
         Proposal,
+        KiteFacts,
         ThreadFacts,
         Verdict,
     )
@@ -950,6 +952,76 @@ def _rule_rate_limit(
     return reasons
 
 
+def _rule_kite_mandate(
+    proposal: Proposal, facts: Optional[Any], cfg: dict[str, Any], ledger: Any
+) -> list[tuple[str, str]]:
+    """Authorize a kite.place_order proposal by delegating to llmfin.risk's
+    already-adversarially-tested mandate logic, evaluated per-tenant.
+
+    Deliberately does NOT reimplement finLM's mandate semantics (NFKC symbol
+    normalization, the PRICE_BINDING_ORDER_TYPES carve-out, empty-allowlist-
+    means-unrestricted) as native warrant rules - re-deriving already-red-teamed
+    logic in a second place is how it quietly drifts from what was actually
+    tested. This is a thin adapter, not a reimplementation.
+
+    Only applies to the kite app; every other tool returns [] (not
+    applicable), same shape as `_rule_notion_parent_allowlist`.
+    """
+    if registry_mod.app_of(proposal.tool) != "kite":
+        return []
+
+    # Fail closed if the platform layer forgot to wire a facts_providers
+    # closure for kite - this is the same "no facts, no trust anchor, refuse"
+    # posture _rule_recipient_scope takes when ThreadFacts is None, applied to
+    # a proposal type where None is never a valid state to check against at
+    # all (unlike Gmail, where "no thread" is a real, refusable case).
+    if not isinstance(facts, KiteFacts):
+        return [
+            (
+                "kite_mandate",
+                "No broker-verified KiteFacts were supplied for a kite proposal - refusing "
+                "rather than evaluating against anything the proposal itself claims.",
+            )
+        ]
+
+    # Checked before the mandate delegation below, mirroring both check()'s
+    # own kill-switch-before-policy ordering and risk.py's own
+    # kill-switch-first check inside check_order() itself - belt and braces,
+    # not redundant: this short-circuits before even importing llmfin.
+    if facts.kill_switch_reason:
+        return [("kite_kill_switch", facts.kill_switch_reason)]
+
+    try:
+        from llmfin.risk import check_order as _llmfin_check_order
+    except ImportError:
+        return [
+            (
+                "kite_mandate",
+                "llmfin is not installed in this environment, so the kite mandate rule "
+                "cannot be evaluated. Fails closed rather than allowing an unauthorized order.",
+            )
+        ]
+
+    params = proposal.params if isinstance(proposal.params, dict) else {}
+    verdict = _llmfin_check_order(
+        symbol=params.get("tradingsymbol"),
+        transaction_type=params.get("transaction_type"),
+        quantity=params.get("quantity"),
+        exchange=params.get("exchange", "NSE"),
+        product=params.get("product", "CNC"),
+        est_price=facts.live_quote,
+        order_type=params.get("order_type", "MARKET"),
+        est_price_source=facts.quote_source,
+        injected_mandate=facts.mandate,
+        kill_switch_reason=facts.kill_switch_reason,
+        orders_today=facts.orders_today,
+        value_today=facts.value_today,
+    )
+    if verdict.allowed:
+        return []
+    return [("kite_mandate", reason) for reason in verdict.reasons]
+
+
 RULES: dict[
     str, Callable[[Proposal, Optional[ThreadFacts], dict[str, Any], Any], list[tuple[str, str]]]
 ] = {
@@ -963,6 +1035,7 @@ RULES: dict[
     "irreversible_gate": _rule_irreversible_gate,
     "audience_bound": _rule_audience_bound,
     "rate_limit": _rule_rate_limit,
+    "kite_mandate": _rule_kite_mandate,
 }
 
 

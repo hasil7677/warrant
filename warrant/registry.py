@@ -202,6 +202,19 @@ class ToolSpec:
     flat_cost_currency: str = "usd"
     idempotency_params: tuple[str, ...] = ()
     scope: str = ""
+    spend_enforced_externally: bool = False
+    """True only for a SPEND tool whose cap is enforced by a dedicated policy
+    rule reading a broker-verified fact (e.g. a live quote fetched at gate
+    time), instead of `_rule_spend_cap` reading the model's own claimed
+    `amount_param`. This is a STRONGER guarantee than amount_param/
+    flat_cost_minor, not a weaker one - the model's claimed order value for a
+    MARKET order is not a real number until the order fills, so trusting it
+    the way a Stripe refund amount can be trusted would reintroduce the exact
+    unverified-number problem `llmfin.risk.PRICE_BINDING_ORDER_TYPES` exists
+    to avoid. Set this only when a named rule (see policy.py) actually
+    enforces spend for this tool some other way - it is not a way to skip
+    enforcement, only to point at where it lives. See kite.place_order and
+    _rule_kite_mandate."""
 
     @property
     def param_names(self) -> set[str]:
@@ -733,6 +746,67 @@ APP_LIST: tuple[AppSpec, ...] = (
         ),
     ),
 
+    AppSpec(
+        name="kite",
+        module="kite",
+        fake="FakeKite",
+        title="Zerodha Kite Connect",
+        api="Kite Connect v3 (kiteconnect)",
+        auth="Per-tenant OAuth (BYO Kite Connect app) - see finLM-platform/api/kite_gateway.py",
+        liveness=FAKE_ONLY,
+        note=(
+            "finLM's own Kite OAuth/order-placement path (llmfin.session_manager, "
+            "llmfin.risk) is separately proven live for a single operator - see "
+            "finLM's CLAUDE.md. This tool has not yet been exercised through "
+            "warrant's own gate in a live run. Unlike every other app in this "
+            "registry, the client for 'kite' is never lazily resolved from "
+            "warrant.apps - credentials are tenant-scoped and live in Postgres, "
+            "not a static module-level session, so the platform layer MUST always "
+            "construct Broker(apps={'kite': <tenant's authenticated KiteConnect>}) "
+            "explicitly. warrant.apps.kite / FakeKite do not exist; a Broker that "
+            "reaches this app without one supplied fails loudly on import, which "
+            "is the correct behaviour - there is no valid default kite client."
+        ),
+        tools=(
+            ToolSpec(
+                name="kite.place_order",
+                app="kite",
+                function="place_order",
+                summary=(
+                    "Place a real order on the tenant's own Kite trading account. "
+                    "Gated by _rule_kite_mandate (policy.py), which delegates to "
+                    "llmfin.risk.check_order() - the same mandate/kill-switch logic "
+                    "finLM's own single-operator gate uses, evaluated per-tenant."
+                ),
+                params=(
+                    _p("tradingsymbol", required=True),
+                    _p("transaction_type", required=True, description="BUY | SELL"),
+                    _p("quantity", "integer", True),
+                    _p("order_type", description="MARKET | LIMIT | SL | SL-M"),
+                    _p("price", "number", description="Only binding for a BUY LIMIT/SL - see PRICE_BINDING_ORDER_TYPES."),
+                    _p("trigger_price", "number"),
+                    _p("product", description="CNC | MIS | NRML"),
+                    _p("exchange", description="e.g. NSE"),
+                ),
+                # Not THIRD_PARTY: the tenant is trading their own account, there
+                # is no recipient/thread this action lands in front of. Not
+                # DESTRUCTIVE: an order adds/reduces a position, it does not
+                # overwrite prior state. No amount_param/flat_cost_minor: a
+                # MARKET order's value is unknown until fill, and the model's own
+                # claimed price is exactly the unverified number risk.py's
+                # PRICE_BINDING_ORDER_TYPES exists to distrust - spend/mandate
+                # enforcement happens entirely inside _rule_kite_mandate via
+                # KiteFacts, not via Broker._effect_fields()'s generic spend path.
+                classes=frozenset({WRITE, SPEND, IRREVERSIBLE}),
+                spend_enforced_externally=True,  # see _rule_kite_mandate, policy.py
+                idempotency_params=(
+                    "tradingsymbol", "transaction_type", "quantity",
+                    "order_type", "product", "exchange",
+                ),
+            ),
+        ),
+    ),
+
 )
 
 
@@ -887,10 +961,16 @@ def validate(apps: Iterable[AppSpec] = APP_LIST) -> list[str]:
                 problems.append(
                     f"tool {tool.name!r} is {AUDIENCE} but names nothing the fanout bound can read"
                 )
-            if SPEND in tool.classes and not (tool.amount_param or tool.flat_cost_minor):
+            if (
+                SPEND in tool.classes
+                and not (tool.amount_param or tool.flat_cost_minor)
+                and not tool.spend_enforced_externally
+            ):
                 problems.append(
                     f"tool {tool.name!r} is {SPEND} but names neither an amount_param nor a "
-                    "flat_cost_minor, so no cap can be enforced against it"
+                    "flat_cost_minor, so no cap can be enforced against it (or, if enforcement "
+                    "genuinely lives in a dedicated policy rule instead, set "
+                    "spend_enforced_externally=True and name that rule in a comment)"
                 )
             if tool.amount_param and tool.flat_cost_minor:
                 problems.append(

@@ -59,7 +59,8 @@ becoming a registry field every other tool would carry uselessly.
 from __future__ import annotations
 
 import importlib
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 from warrant import journal as journal_mod
 from warrant import policy as policy_mod
@@ -67,6 +68,7 @@ from warrant import registry as registry_mod
 from warrant.contract import (
     CALENDAR_CREATE_EVENT,
     GMAIL_SEND,
+    KITE_PLACE_ORDER,
     NOTION_CREATE_PAGE,
     STATUS_ERROR,
     STATUS_EXECUTED,
@@ -88,6 +90,8 @@ class Broker:
         notion: Any = None,
         apps: Optional[dict[str, Any]] = None,
         ledger: Optional[Ledger] = None,
+        facts_providers: Optional[dict[str, Callable[[Proposal], Any]]] = None,
+        journal_path: Optional[Path] = None,
     ) -> None:
         """Real clients by default; pass fakes to run without credentials.
 
@@ -100,6 +104,22 @@ class Broker:
         named in neither place resolves lazily to its real module on first
         use, the same way gmail/calendar/notion always have - constructing a
         Broker never triggers an auth check on its own.
+
+        `facts_providers` is a per-app override for how `execute()` gathers
+        the facts a proposal is checked against, for apps whose trust anchor
+        isn't an email thread. Every app absent from this dict keeps the
+        original `facts_for(proposal.thread_id)` behaviour exactly - this
+        parameter is purely additive. See `_gather_facts()` and
+        `contract.KiteFacts` for the one app that needs it today: a kite
+        proposal has no thread_id, and half of what it needs to be checked
+        against (a live quote) can only be fetched once the proposal exists,
+        so the platform layer hands in a closure rather than a static value.
+
+        `journal_path`, when supplied, routes every `journal.log_decision()`
+        call this Broker makes to that file instead of the module-global
+        journal - the per-tenant equivalent of `ledger` above, using
+        `journal.py`'s own additive `journal_path` parameter (see
+        journal.py). Omitting it keeps every existing caller unaffected.
         """
         if gmail is None or calendar is None or notion is None:
             from warrant.apps import gcal as _gcal
@@ -115,6 +135,8 @@ class Broker:
         self._clients["calendar"] = calendar
         self._clients["notion"] = notion
         self.ledger = ledger if ledger is not None else Ledger()
+        self._facts_providers: dict[str, Callable[[Proposal], Any]] = dict(facts_providers or {})
+        self._journal_path = journal_path
 
     def _client(self, app_name: str) -> Any:
         """The client for one app, resolving to the real adapter on first use.
@@ -164,6 +186,21 @@ class Broker:
             # scope rules refuse. Failing closed here is deliberate.
             return None
 
+    def _gather_facts(self, proposal: Proposal) -> Any:
+        """Dispatch to the right trust anchor for this proposal's app.
+
+        An app named in `self._facts_providers` (set at construction time)
+        is checked against whatever that closure returns - see the
+        `facts_providers` parameter's docstring above. Every other app keeps
+        the original behaviour byte-for-byte: `facts_for(proposal.thread_id)`,
+        which is what every one of the twelve pre-existing apps' tests already
+        exercise and must keep exercising unchanged.
+        """
+        spec = registry_mod.tool_spec(proposal.tool)
+        if spec is not None and spec.app in self._facts_providers:
+            return self._facts_providers[spec.app](proposal)
+        return self.facts_for(proposal.thread_id)
+
     # ── the single entry point ──────────────────────────────────────────
 
     def execute(self, proposal: Proposal) -> dict[str, Any]:
@@ -195,7 +232,7 @@ class Broker:
                 ],
                 ["ambiguous_external_state"],
             )
-            row_id = journal_mod.log_decision(proposal, verdict)
+            row_id = journal_mod.log_decision(proposal, verdict, journal_path=self._journal_path)
             return {
                 "status": STATUS_REJECTED,
                 "reasons": verdict.reasons,
@@ -203,11 +240,11 @@ class Broker:
                 "journal_id": row_id,
             }
 
-        facts = self.facts_for(proposal.thread_id)
+        facts = self._gather_facts(proposal)
         verdict: Verdict = policy_mod.check(proposal, facts, self.ledger)
 
         if not verdict.allowed:
-            row_id = journal_mod.log_decision(proposal, verdict)
+            row_id = journal_mod.log_decision(proposal, verdict, journal_path=self._journal_path)
             return {
                 "status": STATUS_REJECTED,
                 "reasons": verdict.reasons,
@@ -225,7 +262,9 @@ class Broker:
         try:
             external_id = self._perform(proposal)
         except Exception as exc:
-            row_id = journal_mod.log_decision(proposal, verdict, error=f"{type(exc).__name__}: {exc}")
+            row_id = journal_mod.log_decision(
+                proposal, verdict, error=f"{type(exc).__name__}: {exc}", journal_path=self._journal_path
+            )
             # The ledger row stays 'pending' - deliberately not resolved
             # either way here, because we do not know which way is true.
             # `pending_attempt()` is what makes the next identical proposal
@@ -241,7 +280,9 @@ class Broker:
             external_id=external_id,
             **self._effect_fields(proposal),
         )
-        row_id = journal_mod.log_decision(proposal, verdict, external_id=external_id)
+        row_id = journal_mod.log_decision(
+            proposal, verdict, external_id=external_id, journal_path=self._journal_path
+        )
         return {
             "status": STATUS_EXECUTED,
             "external_id": external_id,
@@ -256,6 +297,14 @@ class Broker:
         compute it, so the two sides can never quietly drift - a spend amount
         recorded one way and priced another would make the cap meaningless
         without either check ever failing.
+
+        A tool with `spend_enforced_externally=True` (kite.place_order) has no
+        `amount_param`/`flat_cost_minor` by design, so this returns no
+        `amount_minor`/`currency` for it and `Ledger.spend_today()` will never
+        reflect kite spend. That is expected, not a gap: `_rule_kite_mandate`
+        gets its own `value_today` from `KiteFacts`, precomputed by the
+        platform layer from Postgres, not from this ledger's generic spend
+        columns.
         """
         spec = registry_mod.tool_spec(proposal.tool)
         if spec is None:
@@ -315,6 +364,15 @@ class Broker:
 
         if proposal.tool == GMAIL_SEND and not kwargs.get("in_reply_to"):
             kwargs["in_reply_to"] = proposal.thread_id
+
+        if proposal.tool == KITE_PLACE_ORDER and "variety" not in kwargs:
+            # Not a registry-declared param (a proposal never sets it) - the
+            # real KiteConnect.place_order requires it, so it is injected
+            # here exactly the way in_reply_to is injected above. "regular"
+            # is KiteConnect.VARIETY_REGULAR's literal real value, hardcoded
+            # rather than imported so this module stays outside the
+            # kiteconnect-import boundary (see apps/kite.py's docstring).
+            kwargs["variety"] = "regular"
 
         result = fn(**kwargs)
         return str(result)
