@@ -28,9 +28,12 @@ The second half of the thesis is what actually generalizes: **the gate reasons a
                                │    (a Gmail thread, a tenant's live quote),
                                │    never anything the model asserted
                                ▼
-                        policy.check(proposal, facts, ledger)  ◀── policy.yaml
+                policy.check(proposal, facts, ledger, chain)  ◀── policy.yaml
                                │                                   (a human wrote this;
-                               │ Verdict(allowed, reasons, rule_ids)  the package never does)
+                               │                                    the package never does)
+                               │  chain = who is acting, on whose
+                               │  behalf — see Delegation below
+                               │ Verdict(allowed, reasons, rule_ids)
                     ┌──────────┴──────────┐
                     │                     │
                refused                allowed
@@ -55,6 +58,103 @@ One `Proposal` dataclass (`warrant/contract.py`) is the only thing that crosses 
 **Hold credentials, execute.** `Broker` is the only module in the package that imports `warrant.apps.*`, and `warrant.auth` is the only module that reads a credential. If the verdict is `allowed`, the broker marks a `'pending'` row in the ledger, calls the app client, and only then resolves the row to `'succeeded'`. The agent process never sees a Gmail OAuth token, a Stripe secret key, or a tenant's Kite session - it sees a dict back: `EXECUTED`, `REJECTED_BY_POLICY_GATE`, or `ERROR`.
 
 **Journal.** Every decision - allowed or refused, and if executed, the resulting external id or the specific exception - lands in `journal.db` (`warrant/journal.py`) before the function returns. `decision` is derived from the verdict object, never passed in independently, so nothing can write a clean-looking journal row for a call that wasn't clean.
+
+## Delegation — who is acting, and on whose behalf
+
+Everything above answers one question: *is this action within the rules?* It has nothing to say about a second one, which matters the moment more than one agent is involved:
+
+> Is **this** agent allowed to perform **this exact action**, in this exact context, **on behalf of this exact user**?
+
+A `Proposal` carries a tool and params. It does not carry a principal — so until this layer existed, the research agent that may only read and the execution agent that may place an order were the same anonymous caller wearing the same `policy.yaml`. `warrant/identity.py` adds the missing axis.
+
+The two are **conjunctive, never alternative**. A delegated authority says what an agent *may* be permitted to do; `policy.yaml` still says what *anyone* is permitted to do. Both must pass. An agent holding every capability class there is still cannot write to a Notion page the policy does not list — `test_delegation_does_not_override_the_rest_of_the_policy` is the assertion.
+
+### The problem, stated precisely
+
+> Can an agent safely delegate a subset of its authority without accidentally granting more authority than it possesses?
+
+Two independent failure modes hide in that sentence, and conflating them is how capability systems get this wrong:
+
+| | What it looks like | What stops it |
+|---|---|---|
+| **Amplification** | A holder mints a child claiming more than it holds. Every signature is valid; nothing is forged. | The attenuation check, re-derived on every link at verification time |
+| **Forgery** | A grant is fabricated or edited after issue. It may attenuate perfectly. | The chained MAC |
+
+A system with only the first is bypassed by writing your own chain. A system with only the second lets any holder issue itself a superset. Both are needed, so both exist — and in `tests/test_identity_delegation.py` **each is tested with the other disabled**, because a suite that only ever tests them together cannot tell you which one is load-bearing.
+
+### The chained MAC
+
+Each grant carries an HMAC over its own canonical bytes. The key is the interesting part:
+
+```
+root grant:   sig = HMAC(root_secret, canonical(body))
+child grant:  sig = HMAC(parent.sig,  canonical(body))
+```
+
+The root secret lives in the operator's environment and is never given to an agent. A holder of grant `G` knows `G.sig` — which is exactly the key needed to mint a child of `G`, and nothing else. So:
+
+- Any holder can **delegate downward** offline, with no round trip to an authority and no secret it was not already given. That is what makes it usable by an agent mid-run.
+- No holder can mint a **sibling**, a **parent**, or a **fresh root** — those need a MAC keyed by something upstream of it.
+- Editing an ancestor invalidates every descendant, because each link's key *is* the previous link's signature.
+
+This is the macaroon construction (Birgisson et al., 2014). The alternative — signing every grant with the root key — would require handing the root secret to every delegation point, i.e. giving every agent the ability to mint anything.
+
+```
+   operator (holds WARRANT_ROOT_SECRET)
+        │  issue_root(classes={write, third_party, irreversible})
+        ▼
+   agent:research-1 ──────────────────────────── may send mail
+        │  attenuate(classes={write})              (third_party)
+        ▼
+   agent:analysis-1 ──────────────────────────── may NOT send mail
+        │  attenuate(tools={notion.create_page})
+        ▼
+   agent:summariser ─────────────────────────── one tool, nothing else
+```
+
+### What a grant can carry
+
+Nothing new — grants are scoped in the **capability classes** `registry.py` already tags every tool with (`write`, `spend`, `egress`, `irreversible`, …). A grant authorizes a tool when the tool's hazard classes are a **subset** of the grant's: a grant that omits `spend` refuses every tool that moves money, and the burden is on the grant to enumerate what it accepts.
+
+That reuse is the point. A grant naming tools only would need editing every time an app is added; a grant carrying `{write}` authorizes exactly as much after app sixteen ships as before, because the new app's hazards are declared in the registry and the subset check picks them up for free.
+
+`authorize()` checks the **leaf** grant, not the root and not the union. The leaf is what the acting agent actually holds; checking either of the others would silently hand a sub-agent its delegator's powers.
+
+### Revocation
+
+A flat set of grant ids, read from `.warrant/revoked-grants.txt` — one id per line, `#` comments allowed. Revoking **any** link kills that grant and everything descended from it, with no tree walk and no database, because verification checks every link. Revoking the root disables every agent at once.
+
+It is a file, read by the gate, rather than an argument the caller passes — the same shape as the kill switch, and for the same reason: a revocation list the governed layer hands in is a list it can hand in empty. There is no un-revoke; a grant is a bearer credential, and if it was worth revoking the holder may still have it.
+
+### Auditability
+
+`journal.db` gained three columns — `principal`, `on_behalf_of`, `chain_json` — so a row answers *who did this, acting as whom, under which authority*, not only *what happened*. Rejected claims of authority are journalled too, with the chain that was claimed; those are the rows worth having. Grant **signatures are never stored** — a signature is the key that mints children, and an audit file that confers authority is not an audit file. A journal written before this layer existed gains the columns by `ALTER TABLE` and keeps every row, with `NULL` principals: nothing knew who was acting when they were written, so nothing claims to now.
+
+### Turning it on
+
+Off by default. The `delegation:` block in `policy.yaml` is commented out, and uncommenting it is a hard switch — from that moment every proposal must arrive with a verified chain or be refused. There is no partial mode, which is the point: once policy.yaml names the rule, `chain=None` is a refusal, so there is no value a caller can pass that turns the check off.
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # → WARRANT_ROOT_SECRET
+```
+
+```python
+from warrant.identity import Principal, issue_root, attenuate
+from warrant.broker import Broker
+
+operator = Principal("user", "sahil")
+root = issue_root(                      # needs the secret — operator only
+    grant_id="g-root", issuer=operator, subject=Principal("agent", "research-1"),
+    classes=["write", "third_party", "irreversible"],
+)
+child = attenuate(                      # needs only the parent grant — agent-callable
+    root, grant_id="g-1", subject=Principal("agent", "analysis-1"), classes=["write"],
+)
+
+broker = Broker(chain=[root, child])    # this sub-agent cannot send mail
+```
+
+The chain goes on the `Broker`, not on `execute()`: it is a property of the session, not of one action, and a per-call argument is one the model-facing loop can vary per call. A sub-agent that should hold less authority gets **its own Broker built from an attenuated chain** — which is what makes "this agent had strictly less power" checkable rather than promised.
 
 ## Threat Model
 
@@ -176,6 +276,9 @@ Honesty first: **`liveness` in `warrant/registry.py` is a field every other laye
 - **Google Sheets** (`append_row`, `clear_range`) - same scope reason as Drive.
 - **Kite / Zerodha** (`place_order`) - **the newest addition (commit `36991a2`)**. Real capability classes (`write`, `spend`, `irreversible`), a real registry entry, a real gate rule (`_rule_kite_mandate`) that delegates to `llmfin.risk.check_order()`, and dedicated end-to-end tests through the real `Broker.execute()` with a fake Kite client. **This has never been exercised through warrant's own gate against a real Kite Connect account or a real market.** `llmfin`'s own Kite OAuth/order-placement path is separately claimed live-verified for a single operator in a different project (finLM), but that is a different codebase and a different evidence trail from this one - it does not make `kite.place_order` in *this* registry live-tested. Treat this integration as proof the capability-class abstraction extends cleanly to a domain with no email thread, real money, and externally-fetched live pricing - not as proof the trading path works end to end against a live broker.
 
+### Implemented, and off by default until an operator turns it on
+- **Delegated authority** (`warrant/identity.py`) - principals, macaroon-style chained-HMAC grants, offline attenuation, expiry, and revocation over the existing capability classes, with 65 adversarial tests. Everything about it is exercised in-process: the amplification defence is tested against correctly-signed widening chains and the forgery defence against perfectly-attenuating forged ones, so neither can pass by leaning on the other. It reaches the real gate (`policy.check`) and the real journal through `Broker.execute()`. What it has *not* had is a multi-agent system actually running on top of it - no agent in this repo builds or attenuates a chain today, so "usable by an agent mid-run" is an argument from the construction (delegation needs only the parent grant, never the root secret) rather than something a running system has demonstrated. The `delegation:` block in `policy.yaml` ships commented out for exactly that reason.
+
 ### Experimental / partially proven
 - **The five reliability findings** (`EVAL_MATRIX.md`): ambiguous-retry handling and workflow-crash resume were real gaps that are now fixed and covered by targeted tests; two others were already correct and only lacked proof; one (injection resistance) is correct by construction rather than by a specific test scenario. All five are narrower than a general reliability guarantee - see the honesty notes at the bottom of `EVAL_MATRIX.md` for the specific limits of finding 4 and finding 5.
 - **The evaluation harness (`eval/`)** measures the gate against hand-written cases for the original rule set; it has not been extended to cover `kite_mandate` yet, so its 29/29 headline number does not speak to the Kite rule at all.
@@ -183,13 +286,16 @@ Honesty first: **`liveness` in `warrant/registry.py` is a field every other laye
 
 ### Planned / not built
 - A mutation for the Kite mandate delegation path.
+- Eval cases and a mutation for the delegation layer - `identity.py` has its own adversarial suite but is not yet reached by `eval/run.py` or `scripts/mutate.py`, so it inherits the same caveat the Kite rule does: the tests would catch a broken attenuation check because they were written to, not because a surviving mutant proved they would.
+- An agent in this repo that actually holds and attenuates a grant. Until one does, the delegation layer is a verified mechanism without a demonstrated caller.
+- Persistent, revocable *sessions* as first-class principals - `session` is a valid principal kind today, but nothing mints session-scoped grants or expires them on logout.
 - Eval cases exercising `kite_mandate` (allow/deny/kill-switch/missing-facts) through the same `eval/run.py` harness the other rules go through.
 - Live verification of `kite.place_order` against a real Kite Connect sandbox or account, with an independent read-back the way `scripts/smoke.py` does for Gmail/Calendar/Notion.
 - Anything beyond the eleven apps currently in `registry.py` - adding app twelve is meant to require a `ToolSpec` and a client, not a new policy rule, but that claim itself is only as strong as the next integration that actually tests it.
 
 ## What this is not
 
-- **Not a guarantee about real API behavior from the test suite alone.** 278 tests and 29 eval cases run against fakes whose method signatures are asserted to match the real clients (`test_registry.py::test_fake_matches_real_client_signature_for_every_tool`). That proves the fakes are shaped like the real clients; it does not prove the real clients behave as expected under real network conditions, rate limits, or partial outages. Only `scripts/smoke.py`'s 8/8 (Gmail, Calendar, Notion) is evidence about a real API.
+- **Not a guarantee about real API behavior from the test suite alone.** 344 tests and 29 eval cases run against fakes whose method signatures are asserted to match the real clients (`test_registry.py::test_fake_matches_real_client_signature_for_every_tool`). That proves the fakes are shaped like the real clients; it does not prove the real clients behave as expected under real network conditions, rate limits, or partial outages. Only `scripts/smoke.py`'s 8/8 (Gmail, Calendar, Notion) is evidence about a real API.
 - **Eight of eleven apps have never made a real call**, Kite included. Each has a real adapter written against its documented API and a fake with an asserted-matching signature - neither is a substitute for a live run, and this README does not claim otherwise.
 - **Not a model evaluation.** The eval harness supplies proposals directly with no model in the loop, by design - the gate's correctness must not depend on the model behaving well, so it is measured without one. `test_reliability.py`'s injection tests are the one place a (stubbed) model backend runs through the loop, and only to prove the gate holds regardless of what it does.
 - **Not an estimate of behavior on arbitrary traffic.** Every adversarial and eval case is hand-written against a specific failure mode the policy was designed for. That is a statement about those modes, not a statistical sample.

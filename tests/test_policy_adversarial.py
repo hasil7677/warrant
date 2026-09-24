@@ -725,20 +725,57 @@ FORBIDDEN_PARAMS = {
 def test_check_exposes_no_bypass_parameter():
     """This test IS the thesis.
 
-    `check()` takes a proposal, the facts the broker read for itself, and a
-    ledger - and none of them is an override. The caller of this function is the
-    layer being governed, so any argument it can set to soften the answer is an
-    argument that makes the answer meaningless. To allow something you edit
-    policy.yaml, outside the conversation, as the person accountable for it.
+    `check()` takes a proposal, the facts the broker read for itself, a ledger,
+    and a delegation chain - and none of them is an override. The caller of this
+    function is the layer being governed, so any argument it can set to soften
+    the answer is an argument that makes the answer meaningless. To allow
+    something you edit policy.yaml, outside the conversation, as the person
+    accountable for it.
 
     It fails the moment someone adds a convenience flag that lets the model vouch
     for itself - which is exactly how the old `confirmed=true` theatre got in.
+
+    `chain` was added with the delegation layer (warrant/identity.py) and is
+    pinned here deliberately, because it is the one argument whose safety is an
+    argument rather than an obvious absence. It is admissible on exactly one
+    ground: it can only ever NARROW the verdict. When policy.yaml does not name
+    `delegation`, it is never read. When policy.yaml does name it, `chain=None`
+    is a refusal - so no value a caller can pass, the default included, turns
+    the check off. That property is not left to this docstring:
+    `test_identity_delegation.py::test_omitting_the_chain_is_a_refusal_not_a_skip`
+    and `::test_a_chain_can_only_ever_narrow_never_widen` assert it directly.
+
+    The three things that WOULD make it a bypass - the root secret, the clock,
+    and the revocation list - are deliberately not parameters at all. They are
+    read from the operator's environment and files by `warrant.identity`, the
+    same way the kill switch is. `test_no_operator_authority_is_a_parameter`
+    below is what keeps that true.
     """
     params = set(inspect.signature(policy_mod.check).parameters)
     assert not (params & FORBIDDEN_PARAMS), (
         f"check() exposes bypass-shaped parameter(s): {params & FORBIDDEN_PARAMS}"
     )
-    assert params == {"proposal", "facts", "ledger"}
+    assert params == {"proposal", "facts", "ledger", "chain"}
+
+
+def test_no_operator_authority_is_a_parameter():
+    """The delegation layer's three operator-owned inputs must never become
+    arguments to `check()`.
+
+    A `secret=` would let the governed layer verify chains against a key it
+    chose, i.e. mint its own authority. A `now=` would let it claim an expired
+    grant is current. A `revocations=` would let it present an empty revocation
+    list and have every revoked agent work again.
+
+    All three are read by `warrant.identity` from the environment and from
+    operator-written files. This test exists because each one is individually
+    tempting - they all make testing easier - and each one individually voids
+    the guarantee.
+    """
+    params = set(inspect.signature(policy_mod.check).parameters)
+    assert not (params & {"secret", "root_secret", "now", "clock", "revocations"}), (
+        f"check() exposes operator-authority parameter(s): {params}"
+    )
 
 
 @pytest.mark.parametrize("flag", ["confirmed", "force", "override", "skip_checks", "admin"])

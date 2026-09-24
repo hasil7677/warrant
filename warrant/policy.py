@@ -61,6 +61,7 @@ import json
 import os
 import unicodedata
 from pathlib import Path
+from itertools import zip_longest
 from typing import Any, Callable, Optional
 
 import yaml
@@ -77,7 +78,7 @@ try:  # imported as `warrant.policy` - the normal case
         ThreadFacts,
         Verdict,
     )
-    from . import registry as registry_mod
+    from . import identity, registry as registry_mod
 except ImportError:  # imported as a bare module from inside the package directory
     from contract import (  # type: ignore[no-redef]
         ACTION_PARAMS,
@@ -90,6 +91,7 @@ except ImportError:  # imported as a bare module from inside the package directo
         ThreadFacts,
         Verdict,
     )
+    import identity  # type: ignore[no-redef]
     import registry as registry_mod  # type: ignore[no-redef]
 
 DATA_DIR = Path(os.getenv("WARRANT_DATA_DIR", ".warrant"))
@@ -1038,14 +1040,121 @@ RULES: dict[
     "kite_mandate": _rule_kite_mandate,
 }
 
+# `delegation` is named in policy.yaml like any other rule, but it is not in
+# RULES and cannot be: every rule above is called with
+# (proposal, facts, cfg, ledger), and none of those four carries a delegation
+# chain. Widening that signature for one rule would make every other rule's
+# parameter list a lie about what it reads.
+#
+# So `check()` evaluates it inline, before the RULES loop, and this set is what
+# keeps the "policy names a rule this build does not implement" guard from
+# firing on it. A name here is a promise that `check()` handles it by hand -
+# `tests/test_identity_delegation.py` asserts the two stay in sync.
+CHECK_LEVEL_RULES: frozenset[str] = frozenset({"delegation"})
+
+
+def _evaluate_delegation(
+    proposal: Proposal, cfg: dict[str, Any], chain: Any
+) -> list[tuple[str, str]]:
+    """The `delegation:` rule: this action must be backed by a verified,
+    attenuating chain of authority that covers the tool being proposed.
+
+    Note what is NOT a parameter: the root secret, the clock, and the
+    revocation list. All three are read by `warrant.identity` from the
+    operator's environment and the operator's files. If any of them were
+    arguments, the layer being governed could supply a secret it chose, a
+    time it liked, or an empty revocation list - and the rule would still
+    report that it had run.
+
+    `chain` IS a parameter, and it is the one thing a caller can hand in.
+    That is safe in exactly one direction: presenting a chain can only ever
+    narrow what is permitted. Presenting none is a refusal (below), so
+    there is no value of `chain` - including `None` - that turns this rule
+    off once the policy has named it.
+    """
+    roots = cfg.get("roots")
+    if roots is not None and not isinstance(roots, list):
+        return [
+            (
+                "policy_malformed",
+                f"delegation.roots must be a list of principal ids, got {type(roots).__name__}.",
+            )
+        ]
+
+    max_depth = cfg.get("max_depth", identity.MAX_CHAIN_DEPTH)
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or max_depth < 1:
+        return [
+            (
+                "policy_malformed",
+                f"delegation.max_depth must be a positive integer, got {max_depth!r}.",
+            )
+        ]
+
+    if chain is None:
+        return [
+            (
+                "delegation",
+                "This policy requires every action to carry a delegation chain naming who is "
+                "acting and on whose behalf, and this proposal carried none. There is no "
+                "anonymous caller to fall back to - remove the `delegation:` rule from "
+                f"{POLICY_FILE} if that is genuinely what you want.",
+            )
+        ]
+
+    revocations_file = cfg.get("revocations_file")
+    try:
+        revocations = identity.load_revocations(
+            Path(revocations_file) if revocations_file else None
+        )
+    except identity.IdentityError as exc:
+        return [("delegation", str(exc))]
+
+    try:
+        grants = (
+            identity.chain_from_dicts(chain)
+            if not all(isinstance(g, identity.Grant) for g in chain)
+            else list(chain)
+        )
+    except (identity.IdentityError, TypeError) as exc:
+        # A chain that will not even parse is refused rather than skipped.
+        return [("delegation", f"Delegation chain could not be read ({exc}); refusing.")]
+
+    verdict = identity.authorize(
+        grants,
+        proposal.tool,
+        revocations=revocations,
+        roots=roots,
+        max_depth=max_depth,
+    )
+    if verdict.allowed:
+        return []
+    # A refusing AuthorityVerdict carries one rule_id per reason, by
+    # construction (`identity._deny`). `zip_longest` rather than `zip` so a
+    # future verdict shape that breaks that pairing degrades to a generic
+    # "delegation" id instead of silently dropping the reason - a refusal
+    # that vanishes because two lists were different lengths would read as
+    # an allow.
+    return [
+        (rule_id or "delegation", reason)
+        for rule_id, reason in zip_longest(
+            verdict.rule_ids, verdict.reasons, fillvalue="delegation"
+        )
+        if reason != "delegation"
+    ]
+
 
 # ── the gate ────────────────────────────────────────────────────────────────
 
 
-def check(proposal: Proposal, facts: Optional[ThreadFacts] = None, ledger: Any = None) -> Verdict:
+def check(
+    proposal: Proposal,
+    facts: Optional[ThreadFacts] = None,
+    ledger: Any = None,
+    chain: Any = None,
+) -> Verdict:
     """Authorize a proposal against policy.yaml. Fails closed.
 
-    Three parameters, and none of them is an override. There is no `confirmed`,
+    Four parameters, and none of them is an override. There is no `confirmed`,
     `force`, `bypass`, `dry_run` or `admin` here and there never will be: the
     caller of this function is the layer being governed, so any argument it can
     set to soften the answer is an argument that makes the answer meaningless. To
@@ -1055,6 +1164,15 @@ def check(proposal: Proposal, facts: Optional[ThreadFacts] = None, ledger: Any =
     `facts` is optional in the signature only so the rules can say WHY its absence
     is a problem. Absent facts do not skip a check; they fail recipient_scope,
     which is the entire outbound surface.
+
+    `chain` is the delegation chain (see `warrant.identity`) proving who is
+    acting and on whose behalf. It is an argument, unlike the root secret and the
+    revocation list, and it is worth being precise about why that is not a hole:
+    it can only ever NARROW the answer. When policy.yaml does not name the
+    `delegation` rule, it is ignored entirely. When policy.yaml DOES name it,
+    `chain=None` is a refusal - so there is no value a caller can pass, including
+    the default, that switches the check off. The worst a caller can do with it
+    is present a weaker authority than it holds and be refused more often.
     """
     # 1. Kill switch, before anything else is read. It has to work when the policy
     #    file is missing, malformed, or mid-edit, because "stop everything now" is
@@ -1151,7 +1269,7 @@ def check(proposal: Proposal, facts: Optional[ThreadFacts] = None, ledger: Any =
     for name, cfg in rules_cfg.items():
         rule_name = str(name)
         fn = RULES.get(rule_name)
-        if fn is None:
+        if fn is None and rule_name not in CHECK_LEVEL_RULES:
             # The policy asks for a check this build cannot perform. Running the
             # remaining rules and allowing would enforce less than the signed
             # policy says, so the only honest answer is to stop here.
@@ -1173,7 +1291,13 @@ def check(proposal: Proposal, facts: Optional[ThreadFacts] = None, ledger: Any =
                 ["policy_malformed"],
             )
         try:
-            found = fn(proposal, facts, cfg, ledger)
+            if rule_name == "delegation":
+                # Evaluated here rather than through RULES - see
+                # CHECK_LEVEL_RULES for why it cannot share that signature.
+                found = _evaluate_delegation(proposal, cfg, chain)
+            else:
+                assert fn is not None  # guaranteed by the CHECK_LEVEL_RULES guard above
+                found = fn(proposal, facts, cfg, ledger)
         except Exception as exc:  # a rule that crashed has not passed
             return Verdict(
                 False,

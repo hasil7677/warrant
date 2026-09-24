@@ -76,7 +76,40 @@ def _connect(journal_path: Optional[Path] = None) -> sqlite3.Connection:
         )
         """
     )
+    _ensure_identity_columns(conn)
     return conn
+
+
+# The three columns that answer "who, acting as whom, under which authority" -
+# added after the original schema shipped, so they arrive by ALTER rather than
+# in the CREATE above. An existing journal must keep opening: the refusals
+# already in it are the evidence this project is built to produce, and a schema
+# change that orphaned them would destroy the thing being protected.
+_IDENTITY_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("principal", "TEXT"),  # the agent that actually proposed the action
+    ("on_behalf_of", "TEXT"),  # the human/tenant at the root of its authority
+    ("chain_json", "TEXT"),  # the grant ids traversed, root -> leaf
+)
+
+
+def _ensure_identity_columns(conn: sqlite3.Connection) -> None:
+    """Add the delegation columns to a journal written before they existed.
+
+    `PRAGMA table_info` rather than catching the "duplicate column name"
+    OperationalError: the error path would also swallow a genuinely failed
+    ALTER, and a journal silently missing a column would record every
+    action as having no principal - which is indistinguishable, when read
+    back, from an action that genuinely had none.
+
+    Rows written before this migration keep NULL in all three, and that is
+    the honest value: nothing knew who was acting when they were written,
+    so nothing should claim to now.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+    for column, sql_type in _IDENTITY_COLUMNS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE decisions ADD COLUMN {column} {sql_type}")
+    conn.commit()
 
 
 def log_decision(
@@ -85,6 +118,7 @@ def log_decision(
     external_id: Optional[str] = None,
     error: Optional[str] = None,
     journal_path: Optional[Path] = None,
+    chain: Any = None,
 ) -> int:
     """Record one gate decision. Returns the row id.
 
@@ -95,15 +129,30 @@ def log_decision(
     `journal_path`, when supplied, writes against that file instead of the
     module-global `JOURNAL_DB` - see `_connect()`. Every existing caller
     omits it and is unaffected.
+
+    `chain` is the delegation chain the proposal was made under, recorded so a
+    row answers "who did this, and on whose behalf" and not only "what
+    happened". It is written verbatim from the chain the gate was GIVEN, which
+    is the honest thing to store: if that chain failed verification, the row is
+    a record of a rejected claim of authority, and those are exactly the rows
+    worth having. `decision` still comes from the verdict, so a chain recorded
+    here can never make a refusal look like an allow.
+
+    Grant signatures are deliberately NOT stored - only ids. A sig is the key
+    that mints children (see `identity.attenuate`), so a journal holding them
+    would be a file that confers authority, and this one is meant to be
+    readable by anyone auditing the system.
     """
     now = datetime.now(timezone.utc)
+    principal, on_behalf_of, chain_ids = _chain_fields(chain)
     conn = _connect(journal_path)
     cur = conn.execute(
         """
         INSERT INTO decisions
         (ts_utc, thread_id, tool, params_json, rationale, decision,
-         rule_ids_json, reasons_json, external_id, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         rule_ids_json, reasons_json, external_id, error,
+         principal, on_behalf_of, chain_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             now.isoformat(timespec="seconds"),
@@ -116,12 +165,45 @@ def log_decision(
             json.dumps(list(verdict.reasons or [])),
             external_id,
             error,
+            principal,
+            on_behalf_of,
+            chain_ids,
         ),
     )
     conn.commit()
     decision_id = cur.lastrowid
     conn.close()
     return int(decision_id)
+
+
+def _chain_fields(chain: Any) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Flatten a delegation chain into the three journal columns.
+
+    Tolerant on purpose, and it is worth saying why a logger is allowed to be
+    tolerant when nothing else in this package is: by the time anything calls
+    this, the gate has already decided. A malformed chain has already been
+    refused by the `delegation` rule; this function's only job is to preserve
+    whatever was presented so a human can see what was attempted. Raising here
+    would lose the record of a rejected attempt, which is the opposite of what
+    a journal is for - so an unreadable chain is recorded as NULL rather than
+    allowed to take the write down with it.
+    """
+    if not chain:
+        return None, None, None
+    try:
+        grants = list(chain)
+        ids = [str(getattr(g, "grant_id", "")) or str(g.get("grant_id", "")) for g in grants]  # type: ignore[union-attr]
+        leaf = grants[-1]
+        root = grants[0]
+        principal = getattr(leaf, "subject", None)
+        issuer = getattr(root, "issuer", None)
+        return (
+            str(principal) if principal is not None else None,
+            str(issuer) if issuer is not None else None,
+            json.dumps(ids),
+        )
+    except Exception:
+        return None, None, None
 
 
 def _loads(raw: Any, fallback: Any) -> Any:
@@ -143,6 +225,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d["params"] = _loads(d.pop("params_json", None), {})
     d["rule_ids"] = _loads(d.pop("rule_ids_json", None), [])
     d["reasons"] = _loads(d.pop("reasons_json", None), [])
+    d["chain"] = _loads(d.pop("chain_json", None), [])
     return d
 
 

@@ -92,6 +92,7 @@ class Broker:
         ledger: Optional[Ledger] = None,
         facts_providers: Optional[dict[str, Callable[[Proposal], Any]]] = None,
         journal_path: Optional[Path] = None,
+        chain: Any = None,
     ) -> None:
         """Real clients by default; pass fakes to run without credentials.
 
@@ -120,6 +121,19 @@ class Broker:
         journal - the per-tenant equivalent of `ledger` above, using
         `journal.py`'s own additive `journal_path` parameter (see
         journal.py). Omitting it keeps every existing caller unaffected.
+
+        `chain` is the delegation chain (see `warrant.identity`) every
+        proposal this Broker gates is made under - who is acting, and on
+        whose behalf. It belongs on the Broker rather than on `execute()`
+        for the same reason `ledger` does: it is a property of the session,
+        not of one action, and an argument to `execute()` would be an
+        argument the model-facing loop passes per call and can therefore
+        vary per call. A sub-agent that should hold less authority gets its
+        own Broker built from an attenuated chain, which is the shape that
+        makes "this agent had strictly less power" checkable rather than
+        promised. Omitting it is only viable when policy.yaml does not name
+        the `delegation` rule; once it does, a Broker with no chain refuses
+        everything.
         """
         if gmail is None or calendar is None or notion is None:
             from warrant.apps import gcal as _gcal
@@ -137,6 +151,7 @@ class Broker:
         self.ledger = ledger if ledger is not None else Ledger()
         self._facts_providers: dict[str, Callable[[Proposal], Any]] = dict(facts_providers or {})
         self._journal_path = journal_path
+        self._chain = chain
 
     def _client(self, app_name: str) -> Any:
         """The client for one app, resolving to the real adapter on first use.
@@ -232,7 +247,7 @@ class Broker:
                 ],
                 ["ambiguous_external_state"],
             )
-            row_id = journal_mod.log_decision(proposal, verdict, journal_path=self._journal_path)
+            row_id = journal_mod.log_decision(proposal, verdict, journal_path=self._journal_path, chain=self._chain)
             return {
                 "status": STATUS_REJECTED,
                 "reasons": verdict.reasons,
@@ -241,10 +256,10 @@ class Broker:
             }
 
         facts = self._gather_facts(proposal)
-        verdict: Verdict = policy_mod.check(proposal, facts, self.ledger)
+        verdict: Verdict = policy_mod.check(proposal, facts, self.ledger, chain=self._chain)
 
         if not verdict.allowed:
-            row_id = journal_mod.log_decision(proposal, verdict, journal_path=self._journal_path)
+            row_id = journal_mod.log_decision(proposal, verdict, journal_path=self._journal_path, chain=self._chain)
             return {
                 "status": STATUS_REJECTED,
                 "reasons": verdict.reasons,
@@ -263,7 +278,7 @@ class Broker:
             external_id = self._perform(proposal)
         except Exception as exc:
             row_id = journal_mod.log_decision(
-                proposal, verdict, error=f"{type(exc).__name__}: {exc}", journal_path=self._journal_path
+                proposal, verdict, error=f"{type(exc).__name__}: {exc}", journal_path=self._journal_path, chain=self._chain
             )
             # The ledger row stays 'pending' - deliberately not resolved
             # either way here, because we do not know which way is true.
@@ -281,7 +296,7 @@ class Broker:
             **self._effect_fields(proposal),
         )
         row_id = journal_mod.log_decision(
-            proposal, verdict, external_id=external_id, journal_path=self._journal_path
+            proposal, verdict, external_id=external_id, journal_path=self._journal_path, chain=self._chain
         )
         return {
             "status": STATUS_EXECUTED,
