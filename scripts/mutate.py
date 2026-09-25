@@ -127,6 +127,43 @@ MUTATIONS = [
         why="a retry of a proposal whose prior attempt has an unknown outcome is performed "
             "again instead of refused, which can duplicate a write that already landed",
     ),
+    # ── the delegation layer ─────────────────────────────────────────────
+    # Its two defences answer two different attacks and each must be killed
+    # on its own. A suite that only ever exercised them together would let a
+    # refactor delete one and keep passing, which is exactly what these two
+    # mutations exist to disprove.
+    Mutation(
+        name="attenuation-not-rechecked",
+        file="warrant/identity.py",
+        find="        widened = sorted(grant.classes - parent.classes)\n        if widened:",
+        replace="        widened = sorted(grant.classes - parent.classes)\n        if False:  # MUTATION",
+        why="a holder can mint itself a child grant carrying capabilities its parent never "
+            "held - every signature still verifies, so only this re-check catches it",
+    ),
+    Mutation(
+        name="chain-signature-not-verified",
+        file="warrant/identity.py",
+        find="            if not grant.signature_matches(key):",
+        replace="            if False:  # MUTATION",
+        why="a fabricated root grant is honoured - the chain can attenuate perfectly, so "
+            "only the MAC catches it",
+    ),
+    Mutation(
+        name="revoked-grants-still-honoured",
+        file="warrant/identity.py",
+        find="        if revocations is not None and revocations.is_revoked(grant.grant_id):",
+        replace="        if False:  # MUTATION",
+        why="revoking a grant stops having any effect, including on every authority "
+            "descended from it",
+    ),
+    Mutation(
+        name="chain-not-bound-to-its-tenant",
+        file="warrant/policy.py",
+        find="    if str(facts_tenant) != str(chain_tenant):",
+        replace="    if False:  # MUTATION",
+        why="a valid delegation chain for one tenant authorizes actions against another "
+            "tenant's account",
+    ),
 ]
 
 

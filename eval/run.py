@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -43,11 +44,19 @@ from warrant import journal as journal_mod  # noqa: E402
 from warrant import policy as policy_mod  # noqa: E402
 from warrant import registry as registry_mod  # noqa: E402
 from warrant import fakes as fakes_mod  # noqa: E402
+from warrant import identity as identity_mod  # noqa: E402
 from warrant.broker import Broker  # noqa: E402
 from warrant.contract import STATUS_EXECUTED, Proposal  # noqa: E402
 from warrant.fakes import seed_thread  # noqa: E402
 from warrant.ledger import Ledger  # noqa: E402
 from warrant.provenance import write_artifact  # noqa: E402
+
+# A fixed secret for the evaluation only. The delegation cases need SOME root
+# authority to verify against, and reading the operator's real
+# WARRANT_ROOT_SECRET would make the evaluation depend on the machine it runs
+# on - the same reason every case gets its own sandbox policy.yaml rather than
+# reading the repo's.
+EVAL_ROOT_SECRET = b"warrant-eval-root-secret-not-an-operator-secret"
 
 CASE_DIR = Path(__file__).parent / "cases"
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -64,6 +73,81 @@ def load_cases() -> list[dict]:
             case["_file"] = path.name
             cases.append(case)
     return cases
+
+
+def _build_chain(spec: dict | None, sandbox: Path):
+    """Build a delegation chain from a case's `delegation:` block.
+
+    Declarative like everything else in a case file — a reviewer reading
+    `agent_classes: [write]` against `expect.rule: delegation_capability`
+    can see why the refusal happens without reading any Python.
+
+    Returns None when a case declares no delegation, which is every case
+    written before this existed. Those run against a policy that never names
+    the `delegation` rule, so the chain is not consulted.
+
+    `tamper: amplify` is the one option that does not go through
+    `attenuate()` — it hand-builds a widening child and re-seals the whole
+    chain so every MAC verifies, which is the only way to test the
+    attenuation re-check rather than the signature check. See
+    tests/test_identity_delegation.py §A for the same technique.
+    """
+    if not spec:
+        os.environ.pop(identity_mod.ROOT_SECRET_ENV, None)
+        return None
+
+    os.environ[identity_mod.ROOT_SECRET_ENV] = EVAL_ROOT_SECRET.decode()
+    identity_mod.REVOCATION_FILE = sandbox / "revoked-grants.txt"
+
+    operator = identity_mod.Principal("user", spec.get("operator", "sahil"))
+    root = identity_mod.issue_root(
+        grant_id=spec.get("root_id", "g-root"),
+        issuer=operator,
+        subject=identity_mod.Principal("agent", spec.get("delegator", "research-1")),
+        classes=spec.get("root_classes", ["write", "third_party", "irreversible"]),
+        expires_at=spec.get("root_expires_at"),
+        secret=EVAL_ROOT_SECRET,
+    )
+
+    agent = spec.get("agent")
+    if not agent:
+        chain = [root]
+    elif spec.get("tamper") == "amplify":
+        widened = identity_mod.Grant(
+            grant_id=spec.get("agent_id", "g-1"),
+            issuer=root.subject,
+            subject=identity_mod.Principal("agent", agent),
+            classes=frozenset(spec.get("agent_classes", [])),
+            parent_id=root.grant_id,
+        )
+        # Re-seal both links so the MAC defence is fully satisfied and only
+        # the attenuation re-check can refuse this.
+        root = root.seal(EVAL_ROOT_SECRET)
+        chain = [root, widened.seal(root.sig.encode("utf-8"))]
+    else:
+        chain = [
+            root,
+            identity_mod.attenuate(
+                root,
+                grant_id=spec.get("agent_id", "g-1"),
+                subject=identity_mod.Principal("agent", agent),
+                classes=spec.get("agent_classes"),
+                tools=spec.get("agent_tools"),
+                expires_at=spec.get("agent_expires_at", root.expires_at),
+            ),
+        ]
+
+    if spec.get("tamper") == "forge":
+        # Re-sign the root under a secret the operator never issued.
+        chain[0] = chain[0].seal(b"a-secret-nobody-authorized")
+
+    revoked = spec.get("revoke") or []
+    if revoked:
+        (sandbox / "revoked-grants.txt").write_text(
+            "\n".join(str(r) for r in revoked) + "\n", encoding="utf-8"
+        )
+
+    return chain
 
 
 def run_case(case: dict, tmp: Path) -> dict:
@@ -112,6 +196,8 @@ def run_case(case: dict, tmp: Path) -> dict:
             thread.get("body", ""),
         )
 
+    chain = _build_chain(case.get("delegation"), sandbox)
+
     ledger = Ledger(sandbox / "ledger.db")
     broker = Broker(
         gmail=app_fakes.pop("gmail"),
@@ -119,6 +205,7 @@ def run_case(case: dict, tmp: Path) -> dict:
         notion=app_fakes.pop("notion"),
         apps=app_fakes,
         ledger=ledger,
+        chain=chain,
     )
 
     spec = case["proposal"]

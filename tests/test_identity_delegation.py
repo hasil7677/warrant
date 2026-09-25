@@ -1148,3 +1148,123 @@ def test_binding_still_catches_a_mismatch_even_when_not_required(bound_gate, tmp
     )
     assert not verdict.allowed
     assert "delegation_tenant_binding" in verdict.rule_ids
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# §J  The SQLite revocation store
+# ════════════════════════════════════════════════════════════════════════════
+#
+# A flat file is right for one operator with an editor and useless for a host
+# that wants revocation to be an API call. The plugin point is a SCHEMA, not
+# an import path - see load_revocations_sqlite's docstring for why naming a
+# Python callable in policy.yaml would cross the "no expression language"
+# line policy.py draws.
+
+
+def _rev_db(path, ids, table="revoked_grants"):
+    conn = sqlite3.connect(path)
+    conn.execute(f"CREATE TABLE {table} (grant_id TEXT PRIMARY KEY)")
+    conn.executemany(f"INSERT INTO {table} VALUES (?)", [(i,) for i in ids])
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_the_sqlite_store_revokes(tmp_path):
+    db = _rev_db(tmp_path / "rev.db", ["g-1"])
+    revocations = ident.load_revocations_sqlite(db)
+    assert revocations.is_revoked("g-1")
+    assert not revocations.is_revoked("g-2")
+
+
+def test_a_missing_revocation_database_means_nothing_revoked(tmp_path):
+    """Same posture as the file version - an absent list widens nothing
+    beyond what the grants already say."""
+    assert ident.load_revocations_sqlite(tmp_path / "absent.db").revoked == set()
+
+
+def test_a_database_without_the_table_raises_rather_than_reading_empty(tmp_path):
+    """The dangerous case, and the reason this is not a try/except returning
+    an empty set: a typo'd table name, or a migration that has not run, must
+    not silently mean "nobody is revoked"."""
+    db = tmp_path / "rev.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE something_else (x TEXT)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(IdentityError) as exc:
+        ident.load_revocations_sqlite(db)
+    assert "Refusing" in str(exc.value)
+
+
+def test_the_gate_never_writes_the_revocation_store(tmp_path):
+    """Opened read-only. A gate that can write the revocation list is a gate
+    that can shorten it."""
+    db = _rev_db(tmp_path / "rev.db", ["g-1"])
+    ident.load_revocations_sqlite(db)
+
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("INSERT INTO revoked_grants VALUES ('g-2')")
+    conn.close()
+
+
+def test_a_table_name_that_is_not_an_identifier_is_refused(tmp_path):
+    """Operator config, not user input - but a table name reaches SQL by
+    concatenation (SQLite has no bind parameter for identifiers) and an
+    identifier that gets there unvalidated is a habit worth not having."""
+    db = _rev_db(tmp_path / "rev.db", ["g-1"])
+    for bad in ["revoked_grants; DROP TABLE x", "1abc", "has space", ""]:
+        with pytest.raises(IdentityError):
+            ident.load_revocations_sqlite(db, bad)
+
+
+def test_a_custom_table_name_works(tmp_path):
+    db = _rev_db(tmp_path / "rev.db", ["g-9"], table="kill_list")
+    assert ident.load_revocations_sqlite(db, "kill_list").is_revoked("g-9")
+
+
+def test_the_sqlite_store_refuses_a_chain_through_the_real_gate(delegated_gate):
+    """End to end: policy.yaml points at a database instead of a file."""
+    r = root()
+    child = attenuate(r, grant_id="g-1", subject=ANALYSIS, classes=["write"])
+    db = _rev_db(delegated_gate / "rev.db", ["g-1"])
+
+    (delegated_gate / "policy.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "rules": {
+                    "delegation": {"roots": ["sahil"], "revocations_sqlite": str(db)},
+                    "notion_parent_allowlist": {"allowed_parents": ["1" * 32]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    verdict = policy_mod.check(page(), chain=[r, child])
+    assert not verdict.allowed
+    assert "delegation_revoked" in verdict.rule_ids
+
+
+def test_configuring_both_stores_is_a_policy_error(delegated_gate):
+    """Silently preferring one would mean an operator who configured both is
+    enforcing half the revocations they believe they are."""
+    (delegated_gate / "policy.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "rules": {
+                    "delegation": {
+                        "revocations_file": str(delegated_gate / "a.txt"),
+                        "revocations_sqlite": str(delegated_gate / "b.db"),
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    verdict = policy_mod.check(page(), chain=[root()])
+    assert not verdict.allowed
+    assert "policy_malformed" in verdict.rule_ids

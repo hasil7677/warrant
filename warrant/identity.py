@@ -139,6 +139,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+import sqlite3
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -576,6 +578,12 @@ class Revocations:
 
 REVOCATION_FILE = Path(os.getenv("WARRANT_REVOCATIONS_FILE", ".warrant/revoked-grants.txt"))
 
+# A plain SQL identifier. Used to validate the operator-configured revocation
+# table name before it is concatenated into a query - SQLite has no bind
+# parameter for identifiers, and an identifier reaching SQL unvalidated is a
+# habit worth not having even when the source is trusted config.
+_SAFE_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 
 def load_revocations(path: Optional[Path] = None) -> Revocations:
     """Read revoked grant ids from an operator-owned file, one per line.
@@ -612,6 +620,85 @@ def load_revocations(path: Optional[Path] = None) -> Revocations:
         line = raw.split("#", 1)[0].strip()
         if line:
             revocations.revoke(line)
+    return revocations
+
+
+REVOCATION_TABLE = "revoked_grants"
+
+
+def load_revocations_sqlite(
+    db_path: Path, table: str = REVOCATION_TABLE
+) -> Revocations:
+    """Read revoked grant ids from `SELECT grant_id FROM <table>` in a
+    SQLite database the operator points at.
+
+    Why this exists, and why it is SQLite specifically: `load_revocations`
+    reads a flat file, which is fine for one operator with an editor and
+    useless for a host that wants revocation to be an API call. finLM-platform
+    hit exactly that — it keeps every other piece of state in Postgres and
+    could not make grant revocation tenant-facing without a human editing a
+    text file on the server.
+
+    The obvious general fix is a plugin point: let policy.yaml name a Python
+    callable that returns a `Revocations`. That is deliberately NOT what this
+    is. policy.py's own docstring says there is no expression language,
+    because "a policy file that can compute is a policy file that can be
+    talked into computing something else", and an import path is computation
+    wearing a config's clothes. A table name and a file path are data.
+
+    So the contract is a *schema*, not code: any process that can write
+    SQLite can drive warrant's revocation, and warrant reads one column from
+    one table and executes nothing. A host on Postgres projects its own
+    revocations into this file — which is what finLM-platform does, from the
+    same endpoint that serves the tenant.
+
+    Same failure posture as the file version: a database that does not exist
+    means nothing revoked (an absent list widens nothing beyond what the
+    grants already say); one that exists and cannot be read, or lacks the
+    table, RAISES. "I could not check" must never be rounded down to
+    "nothing is revoked".
+
+    `table` is validated rather than interpolated blind — it is operator
+    config, not user input, but a table name goes into SQL by concatenation
+    (SQLite has no bind parameter for identifiers) and an identifier that
+    reaches SQL unvalidated is a habit worth not having.
+    """
+    if not _SAFE_IDENTIFIER.fullmatch(table):
+        raise IdentityError(
+            f"Revocation table name {table!r} is not a plain identifier "
+            "(letters, digits, underscore; not starting with a digit). Refusing to "
+            "interpolate it into SQL."
+        )
+
+    db_path = Path(db_path)
+    revocations = Revocations()
+    if not db_path.exists():
+        return revocations
+
+    try:
+        # read-only URI: this function must never create, migrate or write
+        # the store it reads. A gate that can write the revocation list is a
+        # gate that can shorten it.
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise IdentityError(
+            f"Revocation database at {db_path} exists but could not be opened ({exc}). "
+            "Refusing to treat an unreadable revocation store as an empty one."
+        ) from exc
+    try:
+        rows = conn.execute(f"SELECT grant_id FROM {table}").fetchall()
+    except sqlite3.Error as exc:
+        raise IdentityError(
+            f"Could not read {table}.grant_id from {db_path} ({exc}). Refusing to treat an "
+            "unreadable revocation store as an empty one. Expected schema: "
+            f"CREATE TABLE {table} (grant_id TEXT PRIMARY KEY)."
+        ) from exc
+    finally:
+        conn.close()
+
+    for (grant_id,) in rows:
+        if grant_id is not None and str(grant_id).strip():
+            revocations.revoke(str(grant_id).strip())
     return revocations
 
 

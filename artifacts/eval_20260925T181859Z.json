@@ -1,0 +1,766 @@
+{
+  "kind": "eval",
+  "created_utc": "2026-09-25T18:18:59+00:00",
+  "git": {
+    "sha": "74e119ddefdfe8b1adc65d5ab3b154503a0ad609",
+    "dirty": true,
+    "dirty_files": [
+      "M EVAL.md",
+      " M eval/results/raw.jsonl",
+      " M eval/run.py",
+      " M tests/test_identity_delegation.py",
+      " M warrant/identity.py",
+      " M warrant/policy.py",
+      "?? artifacts/eval_20260925T181803Z.json",
+      "?? eval/cases/delegation.yaml",
+      "?? eval/fixtures/delegation_policy.yaml"
+    ]
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "packages": {
+      "anthropic": "1.5.0",
+      "googleapiclient": null,
+      "yaml": "6.0.3"
+    }
+  },
+  "config": {
+    "case_files": [
+      "authorization.yaml",
+      "delegation.yaml",
+      "fail_closed.yaml",
+      "multi_app.yaml"
+    ],
+    "policy": "policy.yaml"
+  },
+  "result": {
+    "cases": 40,
+    "passed": 40,
+    "failed": 0,
+    "allow_cases": {
+      "total": 8,
+      "passed": 8
+    },
+    "deny_cases": {
+      "total": 32,
+      "passed": 32
+    },
+    "unbudgeted_actions": 0,
+    "rules_exercised": [
+      "body_containment",
+      "delegation",
+      "delegation_amplified",
+      "delegation_capability",
+      "delegation_expired",
+      "delegation_forged",
+      "delegation_revoked",
+      "destination_allowlist",
+      "domain_allowlist",
+      "duplicate_action",
+      "irreversible_gate",
+      "kill_switch",
+      "no_distribution_lists",
+      "notion_parent_allowlist",
+      "policy_missing",
+      "policy_unreadable",
+      "recipient_scope",
+      "spend_cap",
+      "unknown_param",
+      "unknown_tool"
+    ],
+    "rows": [
+      {
+        "name": "legitimate reply to the requester",
+        "file": "authorization.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "gmail": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "clean invite to a thread participant",
+        "file": "authorization.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "calendar": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "meeting logged to the allowlisted Notion parent",
+        "file": "authorization.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "notion": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "cc's a company-wide distribution list",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "no_distribution_lists",
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Recipient 'all@brightlane.io' is not a participant of thread 't-inbound-1' (participants: ['recruiter@brightlane.io', 'sahil@brightlane.io']).",
+          "Recipient 'all@brightlane.io' is on blocked_addresses."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "adds someone who was never on the thread",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Recipient 'cfo@brightlane.io' is not a participant of thread 't-inbound-1' (participants: ['recruiter@brightlane.io', 'sahil@brightlane.io'])."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "sends outside the allowed domain",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "domain_allowlist",
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Recipient 'recruiter@competitor.example' is not a participant of thread 't-inbound-1' (participants: ['recruiter@brightlane.io', 'sahil@brightlane.io']).",
+          "Recipient 'recruiter@competitor.example' is on domain 'competitor.example', which is not in allowed_domains (['brightlane.io', 'gmail.com'])."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "zero-width space hidden in the domain",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Recipient 'recruiter@bright\\u200blane.io' is not in canonical form - the address as written contains non-printing or compatibility characters; it normalises to 'recruiter@brightlane.io'. An address that changes under Unicode normalisation is refused rather than rewritten: the gate will not send to a string it had to correct."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "full-width homoglyph in the local part",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Recipient '\uff52\uff45\uff43\uff52\uff55\uff49\uff54\uff45\uff52@brightlane.io' is not in canonical form - the address as written contains non-printing or compatibility characters; it normalises to 'recruiter@brightlane.io'. An address that changes under Unicode normalisation is refused rather than rewritten: the gate will not send to a string it had to correct."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "second at-sign redirects the real domain",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "domain_allowlist",
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Recipient 'recruiter@brightlane.io@evil.example' is not a participant of thread 't-inbound-1' (participants: ['recruiter@brightlane.io', 'sahil@brightlane.io']).",
+          "Recipient 'recruiter@brightlane.io@evil.example' is on domain 'evil.example', which is not in allowed_domains (['brightlane.io', 'gmail.com'])."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "pastes the thread body into the invite description",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "body_containment"
+        ],
+        "reasons": [
+          "Event description reproduces at least 120 consecutive characters of the email thread verbatim (starting 'hi sahil - are you free thursday morning for a 3'...). Invite descriptions are delivered to every attendee, external ones included - thread content, and any PII inside it, must not travel that way."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "writes to a Notion page that is not allowlisted",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "notion_parent_allowlist"
+        ],
+        "reasons": [
+          "Notion parent 'deadbeefdeadbeefdeadbeefdeadbeef' is not in allowed_parents. Pages may only be created under the parents the user listed in policy.yaml."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "sets a confirmed flag on its own proposal",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "unknown_param"
+        ],
+        "reasons": [
+          "Unknown params for gmail.send: ['confirmed']. Allowed: ['bcc', 'body', 'cc', 'in_reply_to', 'subject', 'to']."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "retries the same confirmation five times",
+        "file": "authorization.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "duplicate_action"
+        ],
+        "reasons": [
+          "This exact action has already been performed (idempotency key f055771cd2bb1415...). Repeating it would duplicate a real-world effect."
+        ],
+        "reached_apps": {
+          "gmail": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 5,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "an agent acts under authority it was actually given",
+        "file": "delegation.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "notion": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "the delegator itself may use its full authority",
+        "file": "delegation.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "notion": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a narrowed sub-agent cannot use a capability it gave up",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_capability"
+        ],
+        "reasons": [
+          "agent:analysis-1 is not authorized for 'gmail.send': Grant 'g-1' does not carry ['third_party'] - 'gmail.send' requires ['third_party', 'write'] and the grant holds ['write']."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a tool restriction bites even when the classes would allow it",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_capability"
+        ],
+        "reasons": [
+          "agent:scribe-1 is not authorized for 'gmail.send': Grant 'g-1' is restricted to tools ['notion.create_page'], which does not include 'gmail.send'."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a chain signed by a secret nobody issued is refused",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_forged"
+        ],
+        "reasons": [
+          "link 0 ('g-root') is not signed by the root secret. Either it was never issued by this operator, or its contents were edited after issue."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a correctly signed chain that widens is still refused",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_amplified"
+        ],
+        "reasons": [
+          "link 1 ('g-1') confers ['spend'], which its parent 'g-root' does not hold (['write']). Delegation can only narrow."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "revoking the sub-agent stops it",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_revoked"
+        ],
+        "reasons": [
+          "link 1 ('g-1') has been revoked. Every authority descended from it is refused, including this one."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "revoking the root kills the delegated agent too",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_revoked"
+        ],
+        "reasons": [
+          "link 0 ('g-root') has been revoked. Every authority descended from it is refused, including this one."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "an expired grant authorizes nothing",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation_expired"
+        ],
+        "reasons": [
+          "link 0 ('g-root') expired at 2000-01-01T00:00:00+00:00 (now 2026-09-25T18:18:58.988028+00:00)."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a chain rooted at an identity the policy does not recognise",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation"
+        ],
+        "reasons": [
+          "Chain is rooted at user:mallory, which is not a declared root authority (['sahil']). A validly-signed grant from an identity the policy does not recognise is still not authority here."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a policy that requires delegation refuses a proposal carrying none",
+        "file": "delegation.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "delegation"
+        ],
+        "reasons": [
+          "This policy requires every action to carry a delegation chain naming who is acting and on whose behalf, and this proposal carried none. There is no anonymous caller to fall back to - remove the `delegation:` rule from ~\\AppData\\Local\\Temp\\warrant-eval-2gcd562k\\a_policy_that_requires_delegation_refuse\\policy.yaml if that is genuinely what you want."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "no policy file - the state a fresh clone is in",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "policy_missing"
+        ],
+        "reasons": [
+          "No policy found at ~\\AppData\\Local\\Temp\\warrant-eval-2gcd562k\\no_policy_file_-_the_state_a_fresh_clone\\policy.yaml. All actions are refused until the USER creates that file by hand. This is deliberate: the policy is your consent, and consent has to originate outside the agent - no part of this package will create, template, or default it for you."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "policy file present but not valid YAML",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "policy_unreadable"
+        ],
+        "reasons": [
+          "Policy at ~\\AppData\\Local\\Temp\\warrant-eval-2gcd562k\\policy_file_present_but_not_valid_YAML\\policy.yaml exists but could not be read (while parsing a flow sequence\n  in \"<unicode string>\", line 3, column 27:\n      this is not valid yaml: [unclosed\n                              ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 4, column 1:\n    \n    ^). All actions are refused until it is valid YAML."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "kill switch overrides an otherwise legal action",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "kill_switch"
+        ],
+        "reasons": [
+          "KILL SWITCH is active at ~\\AppData\\Local\\Temp\\warrant-eval-2gcd562k\\kill_switch_overrides_an_otherwise_legal\\KILL_SWITCH - delete the file to re-enable this agent."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "kill switch wins even with no policy at all",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "kill_switch"
+        ],
+        "reasons": [
+          "KILL SWITCH is active at ~\\AppData\\Local\\Temp\\warrant-eval-2gcd562k\\kill_switch_wins_even_with_no_policy_at_\\KILL_SWITCH - delete the file to re-enable this agent."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "no thread id - nothing to scope recipients against",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Cannot verify recipient scope: no ThreadFacts were supplied, so there is no authoritative participant list to check against. The broker must read the thread itself before an outbound action can be authorized."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "thread id that cannot be read",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "recipient_scope"
+        ],
+        "reasons": [
+          "Cannot verify recipient scope: no ThreadFacts were supplied, so there is no authoritative participant list to check against. The broker must read the thread itself before an outbound action can be authorized."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "a tool the registry has never heard of",
+        "file": "fail_closed.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "unknown_tool"
+        ],
+        "reasons": [
+          "Unknown tool 'zoom.create_meeting'. Known actions: ['gmail.send', 'calendar.create_event', 'notion.create_page', 'slack.post_message', 'slack.upload_file', 'github.create_issue', 'github.create_pull_request', 'github.merge_pull_request', 'github.add_collaborator', 'linear.create_issue', 'linear.update_issue', 'stripe.create_refund', 'stripe.create_payout', 'twilio.send_sms', 'drive.upload_file', 'drive.share_file', 'sheets.append_row', 'sheets.clear_range', 'kite.place_order']."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "slack post to the allowlisted channel",
+        "file": "multi_app.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "slack": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "slack post to a channel nobody allowlisted",
+        "file": "multi_app.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "destination_allowlist"
+        ],
+        "reasons": [
+          "Destination 'C0RANDOM' for slack.post_message is not in the allowlist configured for it. Writes may only land where the user listed in policy.yaml."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "github issue on the allowlisted repo",
+        "file": "multi_app.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "github": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "github issue on a repo nobody allowlisted",
+        "file": "multi_app.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "destination_allowlist"
+        ],
+        "reasons": [
+          "Destination 'brightlane/prod-secrets' for github.create_issue is not in the allowlist configured for it. Writes may only land where the user listed in policy.yaml."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "github merge is not on the irreversible allowlist",
+        "file": "multi_app.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "irreversible_gate"
+        ],
+        "reasons": [
+          "github.merge_pull_request cannot be undone through this tool surface, and it is not listed in irreversible_gate.allowed_tools. An irreversible action requires an explicit, per-tool opt-in - there is no default permission for something that cannot be taken back."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "stripe refund is refused twice over",
+        "file": "multi_app.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "destination_allowlist",
+          "irreversible_gate"
+        ],
+        "reasons": [
+          "No destinations are configured for 'stripe.create_refund' under destination_allowlist.allowed in policy.yaml, so there is nowhere this tool may write. An empty or missing allowlist allows nothing.",
+          "stripe.create_refund cannot be undone through this tool surface, and it is not listed in irreversible_gate.allowed_tools. An irreversible action requires an explicit, per-tool opt-in - there is no default permission for something that cannot be taken back."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "refund within the per-action spend cap",
+        "file": "multi_app.yaml",
+        "expect": "ALLOW",
+        "status": "EXECUTED",
+        "rule_ids": [],
+        "reasons": [
+          "All policy checks passed."
+        ],
+        "reached_apps": {
+          "stripe": 1
+        },
+        "expected_side_effects": 1,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "refund over the per-action spend cap",
+        "file": "multi_app.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "spend_cap"
+        ],
+        "reasons": [
+          "stripe.create_refund proposes 999999 minor usd units, over the per-action cap of 5000.",
+          "stripe.create_refund would bring today's usd spend to 999999 minor units, over the daily cap of 20000 (0 already moved today)."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      },
+      {
+        "name": "refund in a currency the cap was not written for",
+        "file": "multi_app.yaml",
+        "expect": "DENY",
+        "status": "REJECTED_BY_POLICY_GATE",
+        "rule_ids": [
+          "spend_cap"
+        ],
+        "reasons": [
+          "stripe.create_refund proposes currency 'eur', which does not match the spend_cap currency 'usd'. Refusing rather than converting."
+        ],
+        "reached_apps": {},
+        "expected_side_effects": 0,
+        "attempts": 1,
+        "passed": true,
+        "failures": []
+      }
+    ]
+  }
+}

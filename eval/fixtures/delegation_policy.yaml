@@ -1,0 +1,24 @@
+# A minimal policy for eval/cases/delegation.yaml. Not the repo's real
+# policy.yaml - a fixture, so exercising the delegation rule here cannot
+# quietly change what the shipped policy means to someone reading it.
+#
+# `delegation` is the only rule named, deliberately. Every case in that file
+# is about WHO is acting and under what authority, and a second rule firing
+# would make a refusal ambiguous about which check caught it - the cases
+# assert on `expect.rule`, so that ambiguity would be a false pass.
+#
+# `notion_parent_allowlist` is the one exception: notion.create_page is the
+# workhorse tool in those cases (its only hazard class is `write`, so a grant
+# carrying {write} covers it exactly), and without a parent allowlist the
+# ALLOW cases would refuse for an unrelated reason.
+
+version: 1
+
+rules:
+  delegation:
+    roots: ["sahil"]
+    max_depth: 4
+
+  notion_parent_allowlist:
+    allowed_parents:
+      - "11111111111111111111111111111111"

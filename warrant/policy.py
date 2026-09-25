@@ -1192,11 +1192,33 @@ def _evaluate_delegation(
             )
         ]
 
+    # Two stores, one of them at a time. A flat file is right for an
+    # operator with an editor; a SQLite table is right for a host that wants
+    # revocation to be an API call rather than an ssh session (see
+    # identity.load_revocations_sqlite for why the plugin point is a schema
+    # and not an import path).
     revocations_file = cfg.get("revocations_file")
+    revocations_sqlite = cfg.get("revocations_sqlite")
+    if revocations_file and revocations_sqlite:
+        # Silently preferring one would mean an operator who configured both
+        # is enforcing half the revocations they think they are.
+        return [
+            (
+                "policy_malformed",
+                "delegation names both revocations_file and revocations_sqlite. Configure "
+                "exactly one - a gate reading only half of two configured revocation lists "
+                "is worse than one that refuses to start.",
+            )
+        ]
     try:
-        revocations = identity.load_revocations(
-            Path(revocations_file) if revocations_file else None
-        )
+        if revocations_sqlite:
+            revocations = identity.load_revocations_sqlite(
+                Path(revocations_sqlite), str(cfg.get("revocations_table", identity.REVOCATION_TABLE))
+            )
+        else:
+            revocations = identity.load_revocations(
+                Path(revocations_file) if revocations_file else None
+            )
     except identity.IdentityError as exc:
         return [("delegation", str(exc))]
 
