@@ -634,6 +634,15 @@ class AuthorityVerdict:
     principal: Optional[Principal] = None
     on_behalf_of: Optional[Principal] = None
     chain_ids: tuple[str, ...] = ()
+    # Every subject in the chain, root-most first. `principal` and
+    # `on_behalf_of` are only the two ENDS, which is not enough for a caller
+    # that needs an intermediate link: a multi-tenant host delegates
+    # platform -> tenant -> agent, and the tenant - the one identity it most
+    # needs to cross-check against its own facts - is in the middle, named
+    # by neither end. Exposed as a tuple rather than left to the caller to
+    # re-walk the chain, so the thing it cross-checks is the same thing
+    # verify_chain actually validated.
+    subjects: tuple[Principal, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -643,6 +652,7 @@ class AuthorityVerdict:
             "principal": str(self.principal) if self.principal else None,
             "on_behalf_of": str(self.on_behalf_of) if self.on_behalf_of else None,
             "chain_ids": list(self.chain_ids),
+            "subjects": [str(p) for p in self.subjects],
         }
 
 
@@ -810,6 +820,7 @@ def verify_chain(
         principal=leaf.subject,
         on_behalf_of=grants[0].issuer,
         chain_ids=tuple(g.grant_id for g in grants),
+        subjects=tuple(g.subject for g in grants),
     )
 
 
@@ -849,6 +860,7 @@ def authorize(
             principal=leaf.subject,
             on_behalf_of=grants[0].issuer,
             chain_ids=tuple(g.grant_id for g in grants),
+            subjects=tuple(g.subject for g in grants),
         )
 
     return AuthorityVerdict(
@@ -861,6 +873,7 @@ def authorize(
         principal=leaf.subject,
         on_behalf_of=grants[0].issuer,
         chain_ids=tuple(g.grant_id for g in grants),
+        subjects=tuple(g.subject for g in grants),
     )
 
 

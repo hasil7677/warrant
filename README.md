@@ -120,6 +120,33 @@ That reuse is the point. A grant naming tools only would need editing every time
 
 `authorize()` checks the **leaf** grant, not the root and not the union. The leaf is what the acting agent actually holds; checking either of the others would silently hand a sub-agent its delegator's powers.
 
+### Binding a chain to the account it acts on
+
+`verify_chain()` proves a chain is genuine, unexpired and attenuating. It
+cannot prove it is the **right** chain — it never sees the facts. A perfectly
+valid chain for tenant A, presented alongside facts the broker read for
+tenant B, passes every check in `identity.py`.
+
+So the binding lives in the policy rule, where both halves are in scope: if
+the chain names a `tenant` principal and the facts carry a `tenant_id`, they
+must match. The tenant is found by scanning **every** subject in the chain,
+not just the two ends — a multi-tenant host delegates `platform → tenant →
+agent`, and the tenant is the middle link, named by neither `principal` nor
+`on_behalf_of`.
+
+```yaml
+delegation:
+  require_tenant_binding: true    # multi-tenant hosts should set this
+```
+
+A mismatch is *always* a refusal. The flag governs only the "cannot check"
+cases — facts with no `tenant_id`, or a chain with no tenant link — which
+are skipped by default so enabling `delegation` does not force a tenant
+model on a single-operator install (`ThreadFacts` has no tenant concept and
+never will). A chain that names *two different* tenants is refused
+outright: attenuation is about capability, not identity, so `identity.py`
+does not forbid it and should not have to.
+
 ### Revocation
 
 A flat set of grant ids, read from `.warrant/revoked-grants.txt` — one id per line, `#` comments allowed. Revoking **any** link kills that grant and everything descended from it, with no tree walk and no database, because verification checks every link. Revoking the root disables every agent at once.
@@ -277,7 +304,11 @@ Honesty first: **`liveness` in `warrant/registry.py` is a field every other laye
 - **Kite / Zerodha** (`place_order`) - **the newest addition (commit `36991a2`)**. Real capability classes (`write`, `spend`, `irreversible`), a real registry entry, a real gate rule (`_rule_kite_mandate`) that delegates to `llmfin.risk.check_order()`, and dedicated end-to-end tests through the real `Broker.execute()` with a fake Kite client. **This has never been exercised through warrant's own gate against a real Kite Connect account or a real market.** `llmfin`'s own Kite OAuth/order-placement path is separately claimed live-verified for a single operator in a different project (finLM), but that is a different codebase and a different evidence trail from this one - it does not make `kite.place_order` in *this* registry live-tested. Treat this integration as proof the capability-class abstraction extends cleanly to a domain with no email thread, real money, and externally-fetched live pricing - not as proof the trading path works end to end against a live broker.
 
 ### Implemented, and off by default until an operator turns it on
-- **Delegated authority** (`warrant/identity.py`) - principals, macaroon-style chained-HMAC grants, offline attenuation, expiry, and revocation over the existing capability classes, with 65 adversarial tests. Everything about it is exercised in-process: the amplification defence is tested against correctly-signed widening chains and the forgery defence against perfectly-attenuating forged ones, so neither can pass by leaning on the other. It reaches the real gate (`policy.check`) and the real journal through `Broker.execute()`. What it has *not* had is a multi-agent system actually running on top of it - no agent in this repo builds or attenuates a chain today, so "usable by an agent mid-run" is an argument from the construction (delegation needs only the parent grant, never the root secret) rather than something a running system has demonstrated. The `delegation:` block in `policy.yaml` ships commented out for exactly that reason.
+- **Delegated authority** (`warrant/identity.py`) - principals, macaroon-style chained-HMAC grants, offline attenuation, expiry, and revocation over the existing capability classes, with 72 adversarial tests. Everything about it is exercised in-process: the amplification defence is tested against correctly-signed widening chains and the forgery defence against perfectly-attenuating forged ones, so neither can pass by leaning on the other. It reaches the real gate (`policy.check`) and the real journal through `Broker.execute()`.
+
+  **It now has a real caller.** [`finLM-platform`](https://github.com/hasil7677/finlm-platform) delegates `service:finlm-platform -> tenant:<id> -> agent:execution:<id>` on every order it gates, with the execution agent attenuated to the single tool `kite.place_order` and a research-scoped role that structurally cannot trade (its grant omits `spend`, which `kite.place_order` requires). That closes the "verified mechanism, no demonstrated caller" gap this entry used to record.
+
+  What is still *not* demonstrated: nothing in **this** repo's own demo/workflow/agent path builds a chain, and the platform's agents are processes the platform itself spawns rather than independent ones holding their grants over time. So "a holder can delegate downward offline, mid-run" remains an argument from the construction (delegation needs only the parent grant, never the root secret) rather than something a long-lived multi-agent system has exercised. `delegation:` stays opt-in in `policy.yaml` accordingly.
 
 ### Experimental / partially proven
 - **The five reliability findings** (`EVAL_MATRIX.md`): ambiguous-retry handling and workflow-crash resume were real gaps that are now fixed and covered by targeted tests; two others were already correct and only lacked proof; one (injection resistance) is correct by construction rather than by a specific test scenario. All five are narrower than a general reliability guarantee - see the honesty notes at the bottom of `EVAL_MATRIX.md` for the specific limits of finding 4 and finding 5.
@@ -287,7 +318,7 @@ Honesty first: **`liveness` in `warrant/registry.py` is a field every other laye
 ### Planned / not built
 - A mutation for the Kite mandate delegation path.
 - Eval cases and a mutation for the delegation layer - `identity.py` has its own adversarial suite but is not yet reached by `eval/run.py` or `scripts/mutate.py`, so it inherits the same caveat the Kite rule does: the tests would catch a broken attenuation check because they were written to, not because a surviving mutant proved they would.
-- An agent in this repo that actually holds and attenuates a grant. Until one does, the delegation layer is a verified mechanism without a demonstrated caller.
+- An agent in *this* repo that holds and attenuates a grant. `finLM-platform` is now a real caller (it delegates `service:finlm-platform → tenant:<id> → agent:execution:<id>` on every order), but nothing in warrant's own demo/workflow path builds a chain yet.
 - Persistent, revocable *sessions* as first-class principals - `session` is a valid principal kind today, but nothing mints session-scoped grants or expires them on logout.
 - Eval cases exercising `kite_mandate` (allow/deny/kill-switch/missing-facts) through the same `eval/run.py` harness the other rules go through.
 - Live verification of `kite.place_order` against a real Kite Connect sandbox or account, with an independent read-back the way `scripts/smoke.py` does for Gmail/Calendar/Notion.
@@ -295,7 +326,7 @@ Honesty first: **`liveness` in `warrant/registry.py` is a field every other laye
 
 ## What this is not
 
-- **Not a guarantee about real API behavior from the test suite alone.** 344 tests and 29 eval cases run against fakes whose method signatures are asserted to match the real clients (`test_registry.py::test_fake_matches_real_client_signature_for_every_tool`). That proves the fakes are shaped like the real clients; it does not prove the real clients behave as expected under real network conditions, rate limits, or partial outages. Only `scripts/smoke.py`'s 8/8 (Gmail, Calendar, Notion) is evidence about a real API.
+- **Not a guarantee about real API behavior from the test suite alone.** 351 tests and 29 eval cases run against fakes whose method signatures are asserted to match the real clients (`test_registry.py::test_fake_matches_real_client_signature_for_every_tool`). That proves the fakes are shaped like the real clients; it does not prove the real clients behave as expected under real network conditions, rate limits, or partial outages. Only `scripts/smoke.py`'s 8/8 (Gmail, Calendar, Notion) is evidence about a real API.
 - **Eight of eleven apps have never made a real call**, Kite included. Each has a real adapter written against its documented API and a fake with an asserted-matching signature - neither is a substitute for a live run, and this README does not claim otherwise.
 - **Not a model evaluation.** The eval harness supplies proposals directly with no model in the loop, by design - the gate's correctness must not depend on the model behaving well, so it is measured without one. `test_reliability.py`'s injection tests are the one place a (stubbed) model backend runs through the loop, and only to prove the gate holds regardless of what it does.
 - **Not an estimate of behavior on arbitrary traffic.** Every adversarial and eval case is hand-written against a specific failure mode the policy was designed for. That is a statement about those modes, not a statistical sample.

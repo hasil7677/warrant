@@ -1053,8 +1053,99 @@ RULES: dict[
 CHECK_LEVEL_RULES: frozenset[str] = frozenset({"delegation"})
 
 
+def _bind_chain_to_facts(
+    verdict: Any, facts: Any, cfg: dict[str, Any]
+) -> list[tuple[str, str]]:
+    """A verified chain must be a chain for the SAME tenant the facts describe.
+
+    `verify_chain` proves a chain is genuine, unexpired and attenuating. It
+    cannot prove it is the RIGHT chain — a perfectly valid chain for tenant A,
+    presented alongside facts read for tenant B, passes every check in
+    identity.py and authorizes an action against the wrong account. Nothing
+    in that module has any way to notice: it never sees the facts.
+
+    So the binding lives here, where both halves are in scope. The rule is:
+    if the chain names a `tenant` principal anywhere and the facts carry a
+    `tenant_id`, they must be equal.
+
+    Two honest limits, both deliberate:
+
+      • **Facts with no tenant_id skip the check.** ThreadFacts has no tenant
+        concept — a Gmail thread is not owned by a tenant — and refusing
+        there would mean this rule could never be used outside a
+        multi-tenant host. Set `require_tenant_binding: true` to turn that
+        skip into a refusal, which any multi-tenant caller should do; the
+        default is off only so enabling `delegation` does not break a
+        single-operator install.
+
+      • **A chain with no tenant principal skips it too.** `platform → agent`
+        with no tenant link in between is a legitimate shape for a
+        single-operator deployment, and there is nothing to bind.
+    """
+    require = bool(cfg.get("require_tenant_binding", False))
+
+    # Scan every subject, not just the two ends: the shape a multi-tenant host
+    # uses is platform -> tenant -> agent, and the tenant is in the middle,
+    # named by neither `principal` nor `on_behalf_of`. `verdict.subjects` is
+    # exactly what verify_chain validated, so this cannot drift from it.
+    tenants = {p.id for p in verdict.subjects if p.kind == "tenant"}
+    if verdict.on_behalf_of is not None and verdict.on_behalf_of.kind == "tenant":
+        tenants.add(verdict.on_behalf_of.id)
+
+    if len(tenants) > 1:
+        # A chain that changes tenant partway down. Nothing in identity.py
+        # forbids it - attenuation is about capability, not identity - but a
+        # delegation that crosses tenants has no honest meaning here, and
+        # picking one of them to bind against would be arbitrary.
+        return [
+            (
+                "delegation_tenant_binding",
+                f"The delegation chain names more than one tenant ({sorted(tenants)}). "
+                "Authority is not transferable between tenants.",
+            )
+        ]
+
+    chain_tenant = next(iter(tenants), None)
+
+    facts_tenant = getattr(facts, "tenant_id", None)
+
+    if chain_tenant is None:
+        if require:
+            return [
+                (
+                    "delegation_tenant_binding",
+                    "Policy sets delegation.require_tenant_binding, but the presented chain "
+                    "names no tenant principal, so there is nothing to bind the facts to.",
+                )
+            ]
+        return []
+
+    if facts_tenant is None:
+        if require:
+            return [
+                (
+                    "delegation_tenant_binding",
+                    f"Policy sets delegation.require_tenant_binding and the chain is scoped to "
+                    f"tenant {chain_tenant!r}, but the facts the broker read carry no tenant_id, "
+                    "so the two cannot be matched. Refusing rather than assuming they agree.",
+                )
+            ]
+        return []
+
+    if str(facts_tenant) != str(chain_tenant):
+        return [
+            (
+                "delegation_tenant_binding",
+                f"The delegation chain authorizes tenant {chain_tenant!r}, but the facts this "
+                f"proposal is evaluated against were read for tenant {str(facts_tenant)!r}. A "
+                "valid chain for one tenant is not authority over another's account.",
+            )
+        ]
+    return []
+
+
 def _evaluate_delegation(
-    proposal: Proposal, cfg: dict[str, Any], chain: Any
+    proposal: Proposal, facts: Any, cfg: dict[str, Any], chain: Any
 ) -> list[tuple[str, str]]:
     """The `delegation:` rule: this action must be backed by a verified,
     attenuating chain of authority that covers the tool being proposed.
@@ -1127,7 +1218,7 @@ def _evaluate_delegation(
         max_depth=max_depth,
     )
     if verdict.allowed:
-        return []
+        return _bind_chain_to_facts(verdict, facts, cfg)
     # A refusing AuthorityVerdict carries one rule_id per reason, by
     # construction (`identity._deny`). `zip_longest` rather than `zip` so a
     # future verdict shape that breaks that pairing degrades to a generic
@@ -1294,7 +1385,7 @@ def check(
             if rule_name == "delegation":
                 # Evaluated here rather than through RULES - see
                 # CHECK_LEVEL_RULES for why it cannot share that signature.
-                found = _evaluate_delegation(proposal, cfg, chain)
+                found = _evaluate_delegation(proposal, facts, cfg, chain)
             else:
                 assert fn is not None  # guaranteed by the CHECK_LEVEL_RULES guard above
                 found = fn(proposal, facts, cfg, ledger)

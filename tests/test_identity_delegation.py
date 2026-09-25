@@ -981,3 +981,170 @@ def test_an_older_journal_gains_the_identity_columns_without_losing_rows(tmp_pat
     assert len(rows) == 2, "the pre-existing refusal must survive the migration"
     assert rows[0]["principal"] is None, "a row written before principals existed claims none"
     assert "chain_json" in rows[1]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# §I  Tenant binding — a valid chain must be the RIGHT chain
+# ════════════════════════════════════════════════════════════════════════════
+#
+# verify_chain proves a chain is genuine, unexpired and attenuating. It cannot
+# prove it is the chain for the account being acted on — it never sees the
+# facts. A perfectly valid chain for tenant A, presented alongside facts read
+# for tenant B, passes every check in identity.py. `_bind_chain_to_facts` in
+# policy.py is where the two halves meet.
+
+TENANT_A = Principal("tenant", "aaaa-1111")
+TENANT_B = Principal("tenant", "bbbb-2222")
+PLATFORM = Principal("service", "finlm-platform")
+
+
+def _tenant_chain(tenant: Principal, classes=("write", "spend", "irreversible")):
+    """platform -> tenant -> agent, the shape a multi-tenant host uses. Note
+    the tenant is the MIDDLE link, named by neither end of the chain."""
+    r = issue_root(
+        grant_id=f"root:{tenant.id}", issuer=PLATFORM, subject=tenant,
+        classes=classes, secret=SECRET,
+    )
+    agent = attenuate(
+        r, grant_id=f"execution:{tenant.id}",
+        subject=Principal("agent", f"execution:{tenant.id}"),
+        classes=classes, tools=["kite.place_order"],
+    )
+    return [r, agent]
+
+
+class _KiteFactsStub:
+    """Only the attribute the binding reads. The real KiteFacts carries a
+    dozen fields none of which this rule has any business looking at."""
+
+    def __init__(self, tenant_id):
+        self.tenant_id = tenant_id
+
+
+BOUND_POLICY = {
+    "version": 1,
+    "rules": {"delegation": {"require_tenant_binding": True}},
+}
+
+
+@pytest.fixture
+def bound_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy_mod, "POLICY_FILE", tmp_path / "policy.yaml")
+    monkeypatch.setattr(policy_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(policy_mod, "KILL_SWITCH_LOCATIONS", [tmp_path / "KILL_SWITCH"])
+    monkeypatch.setattr(ident, "REVOCATION_FILE", tmp_path / "revoked-grants.txt")
+    monkeypatch.setenv(ident.ROOT_SECRET_ENV, SECRET.decode())
+    (tmp_path / "policy.yaml").write_text(yaml.safe_dump(BOUND_POLICY), encoding="utf-8")
+    return tmp_path
+
+
+def order(**kw) -> Proposal:
+    params = {
+        "tradingsymbol": "RELIANCE", "transaction_type": "BUY", "quantity": 1,
+        "order_type": "LIMIT", "price": 100.0, "product": "CNC", "exchange": "NSE",
+    }
+    params.update(kw)
+    return Proposal(tool="kite.place_order", params=params)
+
+
+def test_the_tenant_is_found_even_though_it_is_the_middle_link(bound_gate):
+    """The binding would be useless if it only looked at the chain's ends -
+    platform -> tenant -> agent names the tenant at neither."""
+    chain = _tenant_chain(TENANT_A)
+    verdict = ident.authorize(chain, "kite.place_order", secret=SECRET)
+    assert verdict.on_behalf_of == PLATFORM  # not the tenant
+    assert verdict.principal.kind == "agent"  # not the tenant
+    assert TENANT_A in verdict.subjects  # but it IS here
+
+    assert policy_mod.check(
+        order(), facts=_KiteFactsStub(TENANT_A.id), chain=chain
+    ).allowed
+
+
+def test_a_valid_chain_for_the_wrong_tenant_is_refused(bound_gate):
+    """§I's core test. Tenant A's chain is entirely genuine - correct
+    signatures, correct attenuation, unexpired, unrevoked - and authorizes
+    nothing against tenant B's account."""
+    chain = _tenant_chain(TENANT_A)
+    assert ident.authorize(chain, "kite.place_order", secret=SECRET).allowed
+
+    verdict = policy_mod.check(order(), facts=_KiteFactsStub(TENANT_B.id), chain=chain)
+    assert not verdict.allowed
+    assert "delegation_tenant_binding" in verdict.rule_ids
+    assert "aaaa-1111" in " ".join(verdict.reasons)
+    assert "bbbb-2222" in " ".join(verdict.reasons)
+
+
+def test_require_tenant_binding_refuses_facts_that_cannot_be_matched(bound_gate):
+    """"I could not check" must not read as "it matched". With the flag on,
+    facts carrying no tenant_id are a refusal, not a skip."""
+
+    class _NoTenantFacts:
+        pass
+
+    verdict = policy_mod.check(order(), facts=_NoTenantFacts(), chain=_tenant_chain(TENANT_A))
+    assert not verdict.allowed
+    assert "delegation_tenant_binding" in verdict.rule_ids
+
+
+def test_require_tenant_binding_refuses_a_chain_with_no_tenant_link(bound_gate):
+    """A platform -> agent chain has nothing to bind. Legitimate for a
+    single-operator install, refused once the policy says binding is required."""
+    r = issue_root(
+        grant_id="root", issuer=PLATFORM, subject=Principal("agent", "solo"),
+        classes=["write", "spend", "irreversible"], secret=SECRET,
+    )
+    verdict = policy_mod.check(order(), facts=_KiteFactsStub("aaaa-1111"), chain=[r])
+    assert not verdict.allowed
+    assert "delegation_tenant_binding" in verdict.rule_ids
+
+
+def test_a_chain_that_changes_tenant_partway_down_is_refused(bound_gate):
+    """Attenuation is about capability, not identity - identity.py does not
+    forbid a chain whose links name different tenants, and it should not have
+    to. A delegation that crosses tenants has no honest meaning, and picking
+    one of them to bind against would be arbitrary."""
+    r = issue_root(
+        grant_id="root:a", issuer=PLATFORM, subject=TENANT_A,
+        classes=["write", "spend", "irreversible"], secret=SECRET,
+    )
+    crossed = attenuate(r, grant_id="cross", subject=TENANT_B, classes=["write", "spend"])
+    assert ident.verify_chain([r, crossed], secret=SECRET).allowed, (
+        "identity.py has no opinion on this; the refusal must come from the binding"
+    )
+
+    verdict = policy_mod.check(order(), facts=_KiteFactsStub(TENANT_A.id), chain=[r, crossed])
+    assert not verdict.allowed
+    assert "delegation_tenant_binding" in verdict.rule_ids
+    assert "more than one tenant" in " ".join(verdict.reasons)
+
+
+def test_binding_is_off_by_default_so_a_single_operator_install_still_works(
+    tmp_path, monkeypatch
+):
+    """Enabling `delegation` must not force a tenant model on a deployment
+    that has none - ThreadFacts has no tenant_id and never will."""
+    monkeypatch.setattr(policy_mod, "POLICY_FILE", tmp_path / "policy.yaml")
+    monkeypatch.setattr(policy_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(policy_mod, "KILL_SWITCH_LOCATIONS", [tmp_path / "KILL_SWITCH"])
+    monkeypatch.setattr(ident, "REVOCATION_FILE", tmp_path / "revoked-grants.txt")
+    monkeypatch.setenv(ident.ROOT_SECRET_ENV, SECRET.decode())
+    (tmp_path / "policy.yaml").write_text(
+        yaml.safe_dump({"version": 1, "rules": {"delegation": {}}}), encoding="utf-8"
+    )
+    # A tenant chain, facts with no tenant concept at all: skipped, not refused.
+    assert policy_mod.check(order(), facts=None, chain=_tenant_chain(TENANT_A)).allowed
+
+
+def test_binding_still_catches_a_mismatch_even_when_not_required(bound_gate, tmp_path, monkeypatch):
+    """Off-by-default applies to the "cannot check" case only. When both sides
+    ARE present, a mismatch is always a refusal - there is no configuration
+    that lets tenant A act on tenant B."""
+    (tmp_path / "policy.yaml").write_text(
+        yaml.safe_dump({"version": 1, "rules": {"delegation": {}}}), encoding="utf-8"
+    )
+    verdict = policy_mod.check(
+        order(), facts=_KiteFactsStub(TENANT_B.id), chain=_tenant_chain(TENANT_A)
+    )
+    assert not verdict.allowed
+    assert "delegation_tenant_binding" in verdict.rule_ids
