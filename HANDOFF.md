@@ -4,12 +4,12 @@ Read this whole file before touching anything. It exists so a fresh session
 (new machine, no chat history) can pick this repo up cold.
 
 `README.md` is the argument — what this project claims and why. This file is
-the state: what changed last, what is unpushed, and the three things that
-will waste your time if you don't know them.
+the state: what changed last, where it is published, and the three things
+that will waste your time if you don't know them.
 
 **One-line status:** the Warrant 2.0 delegation layer is built, tested
-(344 passing), committed as `9a2e7f5`, and **not pushed**. It is off by
-default and nothing in this repo calls it yet.
+(344 passing), and pushed (`9a2e7f5`, plus this file as `b080bd4`). It is
+off by default and nothing in this repo calls it yet.
 
 ---
 
@@ -241,29 +241,27 @@ The equivalent mutation was also run against `finLM-platform`'s
 
 ---
 
-## Publish state — nothing is pushed
+## Publish state — all published 2026-09-25
 
-Sahil holds the publish moment himself. As of the end of this session:
+Nothing is waiting to be pushed. The hold that governed earlier sessions is
+over.
 
-| repo | state |
-|---|---|
-| `warrant` | **1 commit ahead** of `origin/main` (`9a2e7f5`). Remote: `github.com/hasil7677/warrant` |
-| `finLM` | `6a2ee73` unpushed (remote is at `838f47d`) |
-| `finLM-platform` | 4 local commits, **no remote configured** |
+| repo | remote | state |
+|---|---|---|
+| `warrant` | `github.com/hasil7677/warrant` | `main` at `b080bd4` |
+| `finLM` | `github.com/hasil7677/finLM` | `main` at `6a2ee73` |
+| `finLM-platform` | `github.com/hasil7677/finlm-platform` | `main`, 4 commits |
 
-**Order matters for the other two.** `finLM-platform` pins `finLM/` as a
-submodule at `6a2ee73`, so `finLM` must be pushed first or the submodule
-reference won't resolve for anyone cloning it. `finLM-platform` needs a
-**new** repo — it cannot be pushed into `finLM`'s, since that would be a
-repo containing itself as a submodule.
+`warrant` has no ordering dependency on the other two and went last. The
+other two did — `finLM-platform` pins `finLM/` as a submodule at `6a2ee73`,
+so `finLM` had to be pushed first or the reference would dangle. It was, and
+a clean `git clone --recurse-submodules` afterwards confirmed the submodule
+registers, clones, and checks out `6a2ee73`.
 
-```bash
-cd finLM && git push origin main
-cd .. && gh repo create finLM-platform --public --source=. --push
-cd ../warrant && git push origin main          # independent of the other two
-```
+That constraint returns any time those repos are re-created or re-pointed.
 
-`warrant` has no ordering dependency on the others and can go any time.
+Note the platform's remote is spelled **`finlm-platform`** (all lowercase)
+while the local directory is `finLM-platform`.
 
 ---
 
