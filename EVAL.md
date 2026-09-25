@@ -1,6 +1,6 @@
 # Evaluation - what the gate did, and what reached the apps
 
-`eval_20260925T181859Z.json` is the machine-readable record of this run; the numbers below are read from it rather than typed in by hand.
+`eval_20260925T184612Z.json` is the machine-readable record of this run; the numbers below are read from it rather than typed in by hand.
 
 **40/40 cases passed** (8/8 expected-allow, 32/32 expected-deny). Actions that reached an app without the case budgeting for one: **0**.
 

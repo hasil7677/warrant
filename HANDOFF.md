@@ -8,8 +8,9 @@ the state: what changed last, where it is published, and the three things
 that will waste your time if you don't know them.
 
 **One-line status:** the Warrant 2.0 delegation layer is built, tested
-(351 passing), pushed, and in real use by finLM-platform. It is off by
-default — `policy.yaml` decides whether a chain is required.
+(359 passing, 40/40 eval cases, 14/14 mutations killed), pushed, and in real
+use by finLM-platform. It is off by default — `policy.yaml` decides whether a
+chain is required.
 
 ---
 
@@ -131,6 +132,9 @@ which is the entire thing being prevented.
 | `tests/test_policy_adversarial.py` | the parameter-guard test updated, plus one new guard |
 | `warrant/policy.py` (later) | `_bind_chain_to_facts` — a verified chain must be the chain for the account the facts describe |
 | `warrant/identity.py` (later) | `AuthorityVerdict.subjects` — the two ends aren't enough; a multi-tenant chain names its tenant in the middle |
+| `warrant/identity.py` (later) | `load_revocations_sqlite` — a revocation store a host can drive from an API, without a code-execution plugin point |
+| `eval/cases/delegation.yaml` | 11 declarative cases, including `tamper: forge` and `tamper: amplify` |
+| `scripts/mutate.py` | 4 delegation mutations, each disabling one defence independently |
 | `README.md` | new §Delegation; roadmap and test count updated |
 
 ---
@@ -228,16 +232,17 @@ The equivalent mutation was also run against `finLM-platform`'s
 - **No in-repo caller.** See gotcha 3. "Usable by an agent mid-run" is an
   argument from the construction (delegation needs only the parent grant,
   never the root secret) — not something a running system has demonstrated.
-- **`eval/run.py` and `scripts/mutate.py` do not cover `identity.py`**
-  (verified: no reference to `identity` or `delegation` in either
-  directory). So the layer inherits the same caveat the Kite rule has — the
-  tests would catch a broken attenuation check because they were written
-  to, not because a surviving mutant proved they would. The eval harness's
-  29/29 headline number says nothing about delegation.
-- **Revocation has no pluggable store.** `load_revocations` takes a path, so
-  a host that keeps revocations in Postgres (finLM-platform does keep
-  everything else there) cannot wire them in — it has to write warrant's
-  file. That is a real limitation and the platform documents it as one.
+- **`_rule_kite_mandate` has neither eval cases nor a mutation** — now the
+  only load-bearing rule in this build with neither. Delegation has both (11
+  eval cases, 4 mutations), so "the tests would catch this breaking" is
+  *proven* for the delegation layer and still merely *asserted* for the Kite
+  rule.
+- **The SQLite revocation store is read-only and local.** A host on Postgres
+  has to project its revocations into a SQLite file warrant reads
+  (finLM-platform does exactly this). That works, and it means a
+  multi-instance deployment needs the projection on each instance or a
+  shared volume — there is no networked revocation store and no cache
+  invalidation protocol.
 - **Sessions are a principal kind with no implementation.** `session` is
   valid in `PRINCIPAL_KINDS`, but nothing mints session-scoped grants or
   expires them on logout.
