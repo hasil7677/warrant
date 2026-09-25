@@ -8,8 +8,8 @@ the state: what changed last, where it is published, and the three things
 that will waste your time if you don't know them.
 
 **One-line status:** the Warrant 2.0 delegation layer is built, tested
-(344 passing), and pushed (`9a2e7f5`, plus this file as `b080bd4`). It is
-off by default and nothing in this repo calls it yet.
+(351 passing), pushed, and in real use by finLM-platform. It is off by
+default — `policy.yaml` decides whether a chain is required.
 
 ---
 
@@ -31,11 +31,15 @@ off by default and nothing in this repo calls it yet.
    refusing with `delegation_unconfigured`. That is the intended
    fail-closed behaviour, not a bug.
 
-3. **Nothing in this repo actually uses the delegation layer.** No agent,
-   workflow, demo, or server route builds or attenuates a grant
-   (`grep -rn "attenuate" warrant/agent.py warrant/workflow.py server/ demo/`
-   → nothing). The mechanism is verified; a caller is not. The README's
-   roadmap says this explicitly and it should stay said.
+3. **Nothing in THIS repo uses the delegation layer — but finLM-platform
+   does.** No agent, workflow, demo, or server route here builds or
+   attenuates a grant (`grep -rn "attenuate" warrant/agent.py
+   warrant/workflow.py server/ demo/` → nothing). The real caller lives in
+   [`finlm-platform`](https://github.com/hasil7677/finlm-platform), at
+   `api/src/finlm_api/delegation.py`: it delegates
+   `service:finlm-platform → tenant:<id> → agent:execution:<id>` on every
+   order it gates. If you change `identity.py`'s public surface, that is
+   what breaks.
 
 ---
 
@@ -125,6 +129,8 @@ which is the entire thing being prevented.
 | `warrant/journal.py` | three new columns by `ALTER TABLE`; `_chain_fields` |
 | `warrant/broker.py` | `Broker(chain=...)`, threaded to `policy.check` and every `log_decision` |
 | `tests/test_policy_adversarial.py` | the parameter-guard test updated, plus one new guard |
+| `warrant/policy.py` (later) | `_bind_chain_to_facts` — a verified chain must be the chain for the account the facts describe |
+| `warrant/identity.py` (later) | `AuthorityVerdict.subjects` — the two ends aren't enough; a multi-tenant chain names its tenant in the middle |
 | `README.md` | new §Delegation; roadmap and test count updated |
 
 ---
@@ -228,6 +234,10 @@ The equivalent mutation was also run against `finLM-platform`'s
   tests would catch a broken attenuation check because they were written
   to, not because a surviving mutant proved they would. The eval harness's
   29/29 headline number says nothing about delegation.
+- **Revocation has no pluggable store.** `load_revocations` takes a path, so
+  a host that keeps revocations in Postgres (finLM-platform does keep
+  everything else there) cannot wire them in — it has to write warrant's
+  file. That is a real limitation and the platform documents it as one.
 - **Sessions are a principal kind with no implementation.** `session` is
   valid in `PRINCIPAL_KINDS`, but nothing mints session-scoped grants or
   expires them on logout.
