@@ -2,7 +2,7 @@
 
 **An agent proposes an action. A declarative policy authorizes it against explicit capability classes. The gate holds the credentials, so the model never does. Every decision is journaled.**
 
-278 tests passing. 11 apps, 19 actions, all reached only through the broker. 3 apps are live-verified against real accounts; 8, including a real-money trading integration added most recently, are fake-only - wired, tested, and honestly labeled as never having made a live call.
+359 tests passing. 11 apps, 19 actions, all reached only through the broker. 3 apps are live-verified against real accounts; 8, including a real-money trading integration added most recently, are fake-only - wired, tested, and honestly labeled as never having made a live call.
 
 ---
 
@@ -233,9 +233,9 @@ What is **not** in this list because it is not tested: multi-agent collusion, a 
 
 ## Evaluation / Benchmarks
 
-- **278 tests passing**, verified by running `python -m pytest tests/ -q` against this checkout at the time this README was written (`278 passed in 5.37s`). This spans structural invariants (`test_structure.py`), the full adversarial policy suite (`test_policy_adversarial.py`), the five reliability findings (`test_reliability.py`), registry self-consistency (`test_registry.py`), and the new Kite mandate rule specifically (`test_policy_kite_mandate.py`, `test_broker_kite_facts.py`).
-- **Mutation testing: 10/10 mutations killed** (`scripts/mutate.py`), one per load-bearing property of the *original* rule set - gate-advisory, normalise-and-send, fail-open-on-missing-policy, ignore-kill-switch, trust-unknown-params, destination-allowlist-membership-not-checked, spend-cap-ignores-per-action-limit, irreversible-gate-open-by-default, audience-bound-uncapped, ambiguous-retry-not-refused. **Honestly noted: `scripts/mutate.py` has not been extended with a mutation for `_rule_kite_mandate` yet** - the Kite rule's correctness rests on the unit/adversarial tests in `test_policy_kite_mandate.py` and `test_broker_kite_facts.py`, not on a proof that those tests would fail if the rule's logic were disabled. That is a real gap, not implied coverage.
-- **40/40 hand-written evaluation cases passed** (`eval/cases/*.yaml` -> `EVAL.md`, artifact `artifacts/eval_20260925T181859Z.json`): 8/8 expected-allow, 32/32 expected-deny, 0 actions reaching a fake app client without the case budgeting for one. Eleven are the delegation cases (`eval/cases/delegation.yaml`), which declare their chain as data - `agent_classes: [write]` against `expect.rule: delegation_capability` is readable without opening any Python. **These cases still do not cover `kite_mandate`**: `EVAL.md`'s "rules exercised" list has no entry for it or for kite's kill switch, so the headline number describes the three-app + destination/spend/irreversible/audience rule set plus delegation, and not the Kite rule.
+- **359 tests passing**, verified by running `python -m pytest tests/ -q` against this checkout at the time this README was written (`359 passed in 8.79s`, re-run 2026-09-26). This spans structural invariants (`test_structure.py`), the full adversarial policy suite (`test_policy_adversarial.py`), the five reliability findings (`test_reliability.py`), registry self-consistency (`test_registry.py`), and the new Kite mandate rule specifically (`test_policy_kite_mandate.py`, `test_broker_kite_facts.py`).
+- **Mutation testing: 23/23 mutations killed** (`scripts/mutate.py`), one per load-bearing property: ten for the original rule set (gate-advisory, normalise-and-send, fail-open-on-missing-policy, ignore-kill-switch, trust-unknown-params, destination-allowlist-membership-not-checked, spend-cap-ignores-per-action-limit, irreversible-gate-open-by-default, audience-bound-uncapped, ambiguous-retry-not-refused), four for the delegation layer, and nine for `_rule_kite_mandate` - which proposals it claims, missing facts, the kill switch, a missing llmfin, a discarded verdict, and each fact it must take from `KiteFacts` rather than the proposal (price, today's value, today's count, the mandate). **Honestly noted:** six of the nine kite mutants are each killed by exactly one test, four of them by the same argument-capture test, so that coverage is real but thin.
+- **55/55 hand-written evaluation cases passed** (`eval/cases/*.yaml` -> `EVAL.md`, artifact `artifacts/eval_20260926T100055Z.json`): 10/10 expected-allow, 45/45 expected-deny, 0 actions reaching a fake app client without the case budgeting for one. Eleven are the delegation cases (`eval/cases/delegation.yaml`), which declare their chain as data - `agent_classes: [write]` against `expect.rule: delegation_capability` is readable without opening any Python. Fifteen are the Kite cases (`eval/cases/kite.yaml`), which run the **real** `llmfin.risk.check_order` rather than a stand-in: warrant does not depend on llmfin, so the harness loads `risk.py` from finLM's source with only its data-store import stubbed, and fails the cases (never skips them) if no usable copy exists. Each Kite refusal is pinned to its reason with `reason_contains`, since the rule reports every mandate breach under the one id `kite_mandate`.
 - **Live integration: 8/8** against real Gmail, Calendar, and Notion, each write independently read back (`artifacts/smoke_20260913T194858Z.json`, via `scripts/smoke.py`). This is the only number in this section backed by a real external service; every other number above runs against fakes.
 - **The evaluation checks ledger state, not status strings.** A refusal case fails if an action reached a fake app client even when the returned status string was correct - a gate that refuses and then acts anyway is worse than one that does neither.
 
@@ -267,7 +267,7 @@ Verified against this checkout (Python 3.10+, per `pyproject.toml`'s `requires-p
 
 ```bash
 pip install -r requirements.txt
-python -m pytest tests/ -q          # 278 passed, ~5s, no credentials or network needed
+python -m pytest tests/ -q          # 359 passed, ~5s, no credentials or network needed
 ```
 
 Everything above runs with no external account: the tests construct their own `Ledger`/`Journal` against `tmp_path`, monkeypatch `policy.POLICY_FILE` to a scratch file per test, and exercise the app layer through `warrant.fakes`, never a real client.
@@ -275,8 +275,8 @@ Everything above runs with no external account: the tests construct their own `L
 To go further:
 
 ```bash
-python scripts/mutate.py            # break the gate on purpose, confirm the tests notice (10/10 currently)
-python eval/run.py                  # 29 hand-written cases -> EVAL.md + a stamped artifact in artifacts/
+python scripts/mutate.py            # break the gate on purpose, confirm the tests notice (23/23 currently)
+python eval/run.py                  # 55 hand-written cases -> EVAL.md + a stamped artifact in artifacts/
 python demo/demo.py                 # ~70s scripted scenario, no credentials, no network
 python scripts/serve.py             # local console at http://127.0.0.1:8000 (requires the `console` extra: pip install -e ".[console]")
 ```
@@ -321,21 +321,18 @@ Honesty first: **`liveness` in `warrant/registry.py` is a field every other laye
 
 ### Experimental / partially proven
 - **The five reliability findings** (`EVAL_MATRIX.md`): ambiguous-retry handling and workflow-crash resume were real gaps that are now fixed and covered by targeted tests; two others were already correct and only lacked proof; one (injection resistance) is correct by construction rather than by a specific test scenario. All five are narrower than a general reliability guarantee - see the honesty notes at the bottom of `EVAL_MATRIX.md` for the specific limits of finding 4 and finding 5.
-- **The evaluation harness (`eval/`)** now covers delegation (11 cases, including a forged chain and a correctly-signed amplifying one) as well as the original rule set. It has still not been extended to cover `kite_mandate`, so its 40/40 headline number does not speak to the Kite rule at all.
-- **Mutation testing (`scripts/mutate.py`)** covers fourteen load-bearing properties, 14/14 killed. Four are the delegation layer's, and they are separate mutations on purpose: `attenuation-not-rechecked` and `chain-signature-not-verified` disable the two defences independently, so a refactor that deleted either could not hide behind the other. There is still no mutation for `_rule_kite_mandate`, so "the tests would catch a broken Kite rule" remains asserted by the tests existing rather than proven.
+- **The evaluation harness (`eval/`)** covers delegation (11 cases, including a forged chain and a correctly-signed amplifying one) and `kite_mandate` (15 cases against the real llmfin arithmetic) as well as the original rule set. What it cannot say about Kite is anything about a real Kite account - the client under the gate is still `FakeKite`.
+- **Mutation testing (`scripts/mutate.py`)** covers twenty-three load-bearing properties, 23/23 killed. Four are the delegation layer's, and they are separate mutations on purpose: `attenuation-not-rechecked` and `chain-signature-not-verified` disable the two defences independently, so a refactor that deleted either could not hide behind the other. Nine are the Kite adapter's; the arithmetic behind it is llmfin's and is mutation-tested there, not here.
 
 ### Planned / not built
-- A mutation for the Kite mandate delegation path.
-- Eval cases and mutations for `_rule_kite_mandate`. The delegation layer now has both (11 eval cases, 4 mutations, all killed); the Kite rule still has neither, so it is the one place left where "the tests would catch this breaking" rests on the tests existing rather than on a mutant dying.
 - An agent in *this* repo that holds and attenuates a grant. `finLM-platform` is now a real caller (it delegates `service:finlm-platform → tenant:<id> → agent:execution:<id>` on every order), but nothing in warrant's own demo/workflow path builds a chain yet.
 - Persistent, revocable *sessions* as first-class principals - `session` is a valid principal kind today, but nothing mints session-scoped grants or expires them on logout.
-- Eval cases exercising `kite_mandate` (allow/deny/kill-switch/missing-facts) through the same `eval/run.py` harness the other rules go through.
 - Live verification of `kite.place_order` against a real Kite Connect sandbox or account, with an independent read-back the way `scripts/smoke.py` does for Gmail/Calendar/Notion.
 - Anything beyond the eleven apps currently in `registry.py` - adding app twelve is meant to require a `ToolSpec` and a client, not a new policy rule, but that claim itself is only as strong as the next integration that actually tests it.
 
 ## What this is not
 
-- **Not a guarantee about real API behavior from the test suite alone.** 359 tests and 40 eval cases run against fakes whose method signatures are asserted to match the real clients (`test_registry.py::test_fake_matches_real_client_signature_for_every_tool`). That proves the fakes are shaped like the real clients; it does not prove the real clients behave as expected under real network conditions, rate limits, or partial outages. Only `scripts/smoke.py`'s 8/8 (Gmail, Calendar, Notion) is evidence about a real API.
+- **Not a guarantee about real API behavior from the test suite alone.** 359 tests and 55 eval cases run against fakes whose method signatures are asserted to match the real clients (`test_registry.py::test_fake_matches_real_client_signature_for_every_tool`). That proves the fakes are shaped like the real clients; it does not prove the real clients behave as expected under real network conditions, rate limits, or partial outages. Only `scripts/smoke.py`'s 8/8 (Gmail, Calendar, Notion) is evidence about a real API.
 - **Eight of eleven apps have never made a real call**, Kite included. Each has a real adapter written against its documented API and a fake with an asserted-matching signature - neither is a substitute for a live run, and this README does not claim otherwise.
 - **Not a model evaluation.** The eval harness supplies proposals directly with no model in the loop, by design - the gate's correctness must not depend on the model behaving well, so it is measured without one. `test_reliability.py`'s injection tests are the one place a (stubbed) model backend runs through the loop, and only to prove the gate holds regardless of what it does.
 - **Not an estimate of behavior on arbitrary traffic.** Every adversarial and eval case is hand-written against a specific failure mode the policy was designed for. That is a statement about those modes, not a statistical sample.

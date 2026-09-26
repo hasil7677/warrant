@@ -8,7 +8,7 @@ the state: what changed last, where it is published, and the three things
 that will waste your time if you don't know them.
 
 **One-line status:** the Warrant 2.0 delegation layer is built, tested
-(359 passing, 40/40 eval cases, 14/14 mutations killed), pushed, and in real
+(359 passing, 55/55 eval cases, 23/23 mutations killed), pushed, and in real
 use by finLM-platform. It is off by default — `policy.yaml` decides whether a
 chain is required.
 
@@ -232,11 +232,14 @@ The equivalent mutation was also run against `finLM-platform`'s
 - **No in-repo caller.** See gotcha 3. "Usable by an agent mid-run" is an
   argument from the construction (delegation needs only the parent grant,
   never the root secret) — not something a running system has demonstrated.
-- **`_rule_kite_mandate` has neither eval cases nor a mutation** — now the
-  only load-bearing rule in this build with neither. Delegation has both (11
-  eval cases, 4 mutations), so "the tests would catch this breaking" is
-  *proven* for the delegation layer and still merely *asserted* for the Kite
-  rule.
+- **The kite mutations are thinly killed.** All nine die, but six of them
+  (`kite-kill-switch-ignored`, `-fails-open-without-llmfin`,
+  `-prices-from-the-proposal`, `-daily-value-not-carried`,
+  `-daily-count-not-carried`, `-mandate-not-the-tenants`) are each killed by
+  exactly one test - four of them by the same capture test in
+  `test_policy_kite_mandate.py`. The eval cases catch them too, but
+  `mutate.py` only runs pytest, so that second net is not what the 23/23
+  counts.
 - **The SQLite revocation store is read-only and local.** A host on Postgres
   has to project its revocations into a SQLite file warrant reads
   (finLM-platform does exactly this). That works, and it means a
@@ -256,10 +259,37 @@ The equivalent mutation was also run against `finLM-platform`'s
 
 ---
 
+## 2026-09-26 — kite_mandate coverage
+
+`_rule_kite_mandate` was the one load-bearing rule with no eval cases and no
+mutation. It now has both:
+
+| File | Change |
+|---|---|
+| `eval/cases/kite.yaml` | **new**, 15 cases (2 allow, 13 deny): every cap, the kill switch, no quote, no mandate row, no facts, llmfin absent, and a MARKET order claiming price 1 to fit the cap. Each deny pins its reason with `reason_contains`, because the rule reports every mandate breach under one rule id |
+| `eval/fixtures/kite_policy.yaml` | **new**, `kite_mandate: {}` and nothing else |
+| `eval/run.py` | `kite:` block → `facts_providers["kite"]`; `llmfin: absent`; `expect.reason_contains`; loads the **real** `llmfin.risk` |
+| `scripts/mutate.py` | 9 kite mutations - which proposals the rule claims, missing facts, kill switch, missing llmfin, a discarded verdict, and each fact the adapter must take from `KiteFacts` rather than the proposal |
+
+**How the eval gets a real `check_order` without warrant depending on
+llmfin.** An installed llmfin is used as-is. Otherwise `risk.py` is loaded from
+`../finLM-platform/finLM/src` (override: `WARRANT_EVAL_LLMFIN_SRC`) with only
+`llmfin.data_store` stubbed - it exists to locate the operator's own order
+ledger, which every case bypasses by injecting the tenant's counters, and the
+real one imports pandas. A copy that predates the `injected_mandate` family of
+parameters is refused, since it would silently read the global mandate file.
+No copy found → the kite cases **fail**, they are not skipped. The origin is
+written into the artifact and `EVAL.md`.
+
+Checked by breaking it: making the rule discard `check_order`'s verdict took
+the eval from 55/55 to 45/55 with 10 orders reaching the fake Kite client.
+
+---
+
 ## Publish state — all published 2026-09-25
 
-Nothing is waiting to be pushed. The hold that governed earlier sessions is
-over.
+**One local commit is not pushed:** the kite_mandate coverage above
+(2026-09-26). Everything before it is on the remote.
 
 | repo | remote | state |
 |---|---|---|

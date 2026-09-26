@@ -164,6 +164,77 @@ MUTATIONS = [
         why="a valid delegation chain for one tenant authorizes actions against another "
             "tenant's account",
     ),
+    # ── the kite mandate ─────────────────────────────────────────────────
+    # _rule_kite_mandate is a thin adapter, so its load-bearing lines are the
+    # adapter's own: which proposals it claims, what it refuses before
+    # delegating, and whether the delegate's answer and inputs are the
+    # tenant's facts rather than the proposal's. The arithmetic itself is
+    # llmfin's and is mutation-tested there, not here.
+    Mutation(
+        name="kite-mandate-never-applies",
+        file="warrant/policy.py",
+        find='    if registry_mod.app_of(proposal.tool) != "kite":\n        return []',
+        replace='    if True:  # MUTATION\n        return []',
+        why="a real-money order is never judged against the tenant's mandate at all",
+    ),
+    Mutation(
+        name="kite-verdict-ignored",
+        file="warrant/policy.py",
+        find='    return [("kite_mandate", reason) for reason in verdict.reasons]',
+        replace='    return []  # MUTATION',
+        why="check_order is consulted and its refusal is thrown away - the mandate becomes advisory",
+    ),
+    Mutation(
+        name="kite-missing-facts-not-refused",
+        file="warrant/policy.py",
+        find="    if not isinstance(facts, KiteFacts):\n        return [",
+        replace="    if not isinstance(facts, KiteFacts):\n        return []  # MUTATION\n        [",
+        why="a kite order with no broker-verified facts is allowed instead of refused",
+    ),
+    Mutation(
+        name="kite-kill-switch-ignored",
+        file="warrant/policy.py",
+        find="    if facts.kill_switch_reason:\n        return [(\"kite_kill_switch\"",
+        replace="    if False:  # MUTATION\n        return [(\"kite_kill_switch\"",
+        why="pausing a tenant's trading no longer stops the gate before the mandate check",
+    ),
+    Mutation(
+        name="kite-fails-open-without-llmfin",
+        file="warrant/policy.py",
+        find="    except ImportError:\n        return [\n            (\n                \"kite_mandate\",\n                \"llmfin is not installed",
+        replace="    except ImportError:\n        return []  # MUTATION\n        [\n            (\n                \"kite_mandate\",\n                \"llmfin is not installed",
+        why="an environment that cannot evaluate the mandate allows every order instead of none",
+    ),
+    Mutation(
+        name="kite-prices-from-the-proposal",
+        file="warrant/policy.py",
+        find="        est_price=facts.live_quote,",
+        replace="        est_price=params.get(\"price\"),  # MUTATION",
+        why="the order is valued at the price the model claimed, not the live quote the "
+            "platform read - a MARKET order can claim price 1 to fit any cap",
+    ),
+    Mutation(
+        name="kite-daily-value-not-carried",
+        file="warrant/policy.py",
+        find="        value_today=facts.value_today,",
+        replace="        value_today=0.0,  # MUTATION",
+        why="the daily rupee cap forgets what was already committed today, so it only ever "
+            "bounds a single order",
+    ),
+    Mutation(
+        name="kite-daily-count-not-carried",
+        file="warrant/policy.py",
+        find="        orders_today=facts.orders_today,",
+        replace="        orders_today=0,  # MUTATION",
+        why="the daily order cap never trips, however many orders have been placed today",
+    ),
+    Mutation(
+        name="kite-mandate-not-the-tenants",
+        file="warrant/policy.py",
+        find="        injected_mandate=facts.mandate,",
+        replace="        injected_mandate={},  # MUTATION",
+        why="orders are judged against an empty mandate instead of the tenant's own limits",
+    ),
 ]
 
 

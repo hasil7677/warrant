@@ -46,7 +46,7 @@ from warrant import registry as registry_mod  # noqa: E402
 from warrant import fakes as fakes_mod  # noqa: E402
 from warrant import identity as identity_mod  # noqa: E402
 from warrant.broker import Broker  # noqa: E402
-from warrant.contract import STATUS_EXECUTED, Proposal  # noqa: E402
+from warrant.contract import STATUS_EXECUTED, KiteFacts, Proposal  # noqa: E402
 from warrant.fakes import seed_thread  # noqa: E402
 from warrant.ledger import Ledger  # noqa: E402
 from warrant.provenance import write_artifact  # noqa: E402
@@ -57,6 +57,18 @@ from warrant.provenance import write_artifact  # noqa: E402
 # on - the same reason every case gets its own sandbox policy.yaml rather than
 # reading the repo's.
 EVAL_ROOT_SECRET = b"warrant-eval-root-secret-not-an-operator-secret"
+
+# Where the real llmfin.risk comes from when it is not installed here. warrant
+# must not depend on llmfin (see _rule_kite_mandate's docstring), so its own
+# venv never has it - but an evaluation of the kite rule against a stand-in
+# check_order() would be measuring the stand-in. The pinned copy is the one
+# finLM-platform ships as a submodule; WARRANT_EVAL_LLMFIN_SRC overrides it.
+LLMFIN_SRC_ENV = "WARRANT_EVAL_LLMFIN_SRC"
+LLMFIN_SRC_DEFAULT = ROOT.parent / "finLM-platform" / "finLM" / "src"
+# The keyword-only parameters a per-tenant caller needs. An llmfin that lacks
+# them silently reads the operator's global mandate file instead of the
+# tenant's facts, so it is refused rather than evaluated against.
+LLMFIN_REQUIRED_PARAMS = ("injected_mandate", "kill_switch_reason", "orders_today", "value_today")
 
 CASE_DIR = Path(__file__).parent / "cases"
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -73,6 +85,84 @@ def load_cases() -> list[dict]:
             case["_file"] = path.name
             cases.append(case)
     return cases
+
+
+def load_llmfin() -> str:
+    """Make the REAL `llmfin.risk.check_order` importable; return where it came from.
+
+    An installed llmfin is used as-is. Otherwise `risk.py` is loaded from
+    source with one substitution: `llmfin.data_store`, which `risk.py`
+    imports only for the directory of the operator's own order ledger, is
+    replaced by a module holding just that path. Every kite case injects the
+    tenant's counters through KiteFacts, so that ledger is never read - and
+    the real data_store drags in pandas, which warrant's environment does not
+    have and must not need. The arithmetic under evaluation is untouched.
+
+    Raises RuntimeError when no usable copy exists. The kite cases that need
+    it then FAIL rather than skip: a skipped case would quietly shrink the
+    denominator, which is the one thing this harness exists not to do.
+    """
+    import importlib
+    import importlib.util
+    import inspect
+    import tempfile
+    import types
+
+    try:
+        risk = importlib.import_module("llmfin.risk")
+        origin = "installed llmfin package"
+    except ImportError:
+        src = Path(os.environ.get(LLMFIN_SRC_ENV) or LLMFIN_SRC_DEFAULT)
+        risk_py = src / "llmfin" / "risk.py"
+        if not risk_py.is_file():
+            raise RuntimeError(
+                f"llmfin.risk is not installed and {risk_py} does not exist - set "
+                f"{LLMFIN_SRC_ENV} to a finLM checkout's src/ directory"
+            )
+        pkg = types.ModuleType("llmfin")
+        pkg.__path__ = [str(risk_py.parent)]
+        data_store = types.ModuleType("llmfin.data_store")
+        data_store.DATA_DIR = Path(tempfile.mkdtemp(prefix="warrant-eval-llmfin-"))
+        sys.modules["llmfin"] = pkg
+        sys.modules["llmfin.data_store"] = data_store
+        spec = importlib.util.spec_from_file_location("llmfin.risk", risk_py)
+        risk = importlib.util.module_from_spec(spec)
+        sys.modules["llmfin.risk"] = risk
+        spec.loader.exec_module(risk)
+        pkg.risk = risk
+        origin = f"{Path(os.path.relpath(risk_py, ROOT)).as_posix()} (loaded from source, data_store stubbed)"
+
+    params = inspect.signature(risk.check_order).parameters
+    missing = [p for p in LLMFIN_REQUIRED_PARAMS if p not in params]
+    if missing:
+        for name in ("llmfin.risk", "llmfin.data_store", "llmfin"):
+            sys.modules.pop(name, None)
+        raise RuntimeError(
+            f"llmfin at {origin} predates per-tenant injection (missing {missing}); "
+            "evaluating against it would read the operator's global mandate"
+        )
+    return origin
+
+
+def _kite_facts_provider(spec):
+    """Turn a case's `kite:` block into the facts_providers callable the
+    platform would hand the broker. `kite: none` models the platform having
+    wired no facts at all - the gate must refuse, not evaluate the proposal
+    against its own claims."""
+    if spec is None:
+        return None
+    if spec == "none":
+        return lambda proposal: None
+    facts = KiteFacts(
+        tenant_id=str(spec.get("tenant_id", "tenant-eval")),
+        mandate=spec.get("mandate"),
+        kill_switch_reason=spec.get("kill_switch_reason"),
+        orders_today=int(spec.get("orders_today", 0)),
+        value_today=float(spec.get("value_today", 0.0)),
+        live_quote=spec.get("live_quote"),
+        quote_source=spec.get("quote_source", "market" if spec.get("live_quote") is not None else "unavailable"),
+    )
+    return lambda proposal: facts
 
 
 def _build_chain(spec: dict | None, sandbox: Path):
@@ -150,6 +240,28 @@ def _build_chain(spec: dict | None, sandbox: Path):
     return chain
 
 
+LLMFIN_ORIGIN: str = ""
+LLMFIN_ERROR: str = ""
+
+
+def _unrunnable(case: dict, why: str) -> dict:
+    """A case the harness could not execute, reported as a failure."""
+    want_allow = str(case.get("expect", {}).get("decision", "DENY")).upper() == "ALLOW"
+    return {
+        "name": case["name"],
+        "file": case["_file"],
+        "expect": "ALLOW" if want_allow else "DENY",
+        "status": "not_run",
+        "rule_ids": [],
+        "reasons": [why],
+        "reached_apps": {},
+        "expected_side_effects": int(case.get("expect", {}).get("side_effects", 1 if want_allow else 0)),
+        "attempts": 0,
+        "passed": False,
+        "failures": [why],
+    }
+
+
 def run_case(case: dict, tmp: Path) -> dict:
     """Execute one case against a freshly isolated gate, broker, and fakes.
 
@@ -198,6 +310,18 @@ def run_case(case: dict, tmp: Path) -> dict:
 
     chain = _build_chain(case.get("delegation"), sandbox)
 
+    facts_providers = {}
+    kite_provider = _kite_facts_provider(case.get("kite"))
+    if kite_provider is not None:
+        facts_providers["kite"] = kite_provider
+
+    # A case that needs the real mandate arithmetic and cannot have it fails
+    # here, visibly - it is not skipped. `llmfin: absent` cases are the
+    # exception: they are ABOUT its absence and must not depend on it existing.
+    llmfin_mode = case.get("llmfin", "real")
+    if case.get("kite") is not None and llmfin_mode == "real" and LLMFIN_ERROR:
+        return _unrunnable(case, f"real llmfin.risk unavailable: {LLMFIN_ERROR}")
+
     ledger = Ledger(sandbox / "ledger.db")
     broker = Broker(
         gmail=app_fakes.pop("gmail"),
@@ -206,18 +330,35 @@ def run_case(case: dict, tmp: Path) -> dict:
         apps=app_fakes,
         ledger=ledger,
         chain=chain,
+        facts_providers=facts_providers or None,
     )
+
+    # `llmfin: absent` makes `from llmfin.risk import ...` raise ImportError
+    # for the duration of the case - a None entry in sys.modules is how Python
+    # itself spells "this import is blocked" - then puts the real one back.
+    hidden = {}
+    if llmfin_mode == "absent":
+        for name in ("llmfin", "llmfin.risk"):
+            hidden[name] = sys.modules.get(name)
+            sys.modules[name] = None  # type: ignore[assignment]
 
     spec = case["proposal"]
     results = []
-    # `repeat` exists so a retry-storm case is one case rather than five.
-    for _ in range(int(case.get("repeat", 1))):
-        results.append(broker.execute(Proposal(
-            tool=spec["tool"],
-            params=dict(spec.get("params", {})),
-            thread_id=spec.get("thread_id", thread_id),
-            rationale=spec.get("rationale", ""),
-        )))
+    try:
+        # `repeat` exists so a retry-storm case is one case rather than five.
+        for _ in range(int(case.get("repeat", 1))):
+            results.append(broker.execute(Proposal(
+                tool=spec["tool"],
+                params=dict(spec.get("params", {})),
+                thread_id=spec.get("thread_id", thread_id),
+                rationale=spec.get("rationale", ""),
+            )))
+    finally:
+        for name, mod in hidden.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
 
     final = results[-1]
     expect = case.get("expect", {})
@@ -231,6 +372,14 @@ def run_case(case: dict, tmp: Path) -> dict:
     want_rule = expect.get("rule")
     if want_rule and want_rule not in final.get("rule_ids", []):
         failures.append(f"expected rule {want_rule!r}, got {final.get('rule_ids')}")
+
+    # A rule id says which rule refused, not why. The kite rule reports every
+    # mandate breach under one id, so a case about the daily cap would still
+    # pass if the order were refused for, say, a missing quote. `reason_contains`
+    # pins the refusal to the reason the case is actually about.
+    want_reason = expect.get("reason_contains")
+    if want_reason and not any(want_reason in r for r in final.get("reasons", [])):
+        failures.append(f"expected a reason containing {want_reason!r}, got {final.get('reasons')}")
 
     # The side-effect check. This is the assertion that a status string cannot
     # satisfy: on a refusal the ledger must be untouched. `tools_executed_today`
@@ -280,6 +429,14 @@ def main() -> int:
         print(f"no cases found in {CASE_DIR}", file=sys.stderr)
         return 2
 
+    global LLMFIN_ORIGIN, LLMFIN_ERROR
+    try:
+        LLMFIN_ORIGIN = load_llmfin()
+    except RuntimeError as exc:
+        LLMFIN_ERROR = str(exc)
+    if not args.quiet:
+        print(f"  llmfin.risk: {LLMFIN_ORIGIN or 'UNAVAILABLE - ' + LLMFIN_ERROR}\n")
+
     RESULTS_DIR.mkdir(exist_ok=True)
     rows = []
     with tempfile.TemporaryDirectory(prefix="warrant-eval-") as td:
@@ -318,12 +475,17 @@ def main() -> int:
         "deny_cases": {"total": len(deny), "passed": sum(r["passed"] for r in deny)},
         "unbudgeted_actions": len(leaked),
         "rules_exercised": sorted({rid for r in rows for rid in r["rule_ids"]}),
+        "llmfin_risk": LLMFIN_ORIGIN or f"unavailable: {LLMFIN_ERROR}",
         "rows": rows,
     }
 
     artifact = write_artifact(
         kind="eval",
-        config={"case_files": sorted({r["file"] for r in rows}), "policy": "policy.yaml"},
+        config={
+            "case_files": sorted({r["file"] for r in rows}),
+            "policy": "policy.yaml",
+            "llmfin_risk": LLMFIN_ORIGIN or f"unavailable: {LLMFIN_ERROR}",
+        },
         result=result,
     )
     write_report(result, artifact)
@@ -370,6 +532,12 @@ def write_report(result: dict, artifact: Path) -> None:
         "gate's correctness must not depend on the model behaving well.",
         "- **Each case runs in its own sandbox** (fresh policy file, ledger, journal, and "
         "kill-switch path), so results do not depend on case ordering.",
+        "- **The kite cases run the real `llmfin.risk.check_order`**, not a stand-in: "
+        f"this run used `{result['llmfin_risk']}`. warrant does not depend on llmfin, "
+        "so when it is not installed the harness loads `risk.py` from finLM's source "
+        "with only `llmfin.data_store` replaced by the one path it exports - every case "
+        "injects the tenant's counters, so that operator-level ledger is never read. "
+        "If no copy can be found the kite cases fail; they are never skipped.",
         "",
         "## Rules exercised",
         "",

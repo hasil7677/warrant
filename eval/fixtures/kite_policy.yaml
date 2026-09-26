@@ -1,0 +1,10 @@
+# A policy for eval/cases/kite.yaml. It names exactly one rule, kite_mandate,
+# because the mandate itself is not in here: it is per-tenant state the
+# platform reads from Postgres and hands the broker as KiteFacts. What this
+# file consents to is "orders are judged against the tenant's own mandate" -
+# the limits come from the case's `kite:` block, standing in for that row.
+
+version: 1
+
+rules:
+  kite_mandate: {}
